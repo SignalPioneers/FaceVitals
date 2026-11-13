@@ -8,7 +8,7 @@
 
 FaceVitals is a research and engineering project that explores contactless estimation of human vital signs using ordinary RGB facial videos captured by a standard camera.
 
-The project aims to investigate how subtle color variations in facial skin, caused by blood volume changes, can be processed to estimate physiological information without requiring physical contact with the person.
+The project investigates how subtle color variations in facial skin, caused by blood volume changes, can be processed to estimate physiological information without requiring physical contact with the person.
 
 Our initial development focuses on heart rate estimation using remote photoplethysmography (rPPG).
 
@@ -109,7 +109,14 @@ The repository contains Python scripts for:
 - Stability analysis and algorithm comparison.
 - Live application development.
 
-## 9. Limitations
+## 9. Project Documentation
+
+For contributors, researchers and anyone interested in understanding the implementation, the following documentation is available:
+
+- **[Development Workflow](docs/DEVELOPMENT_WORKFLOW.md)** – Explains the project pipeline, processing stages and how the different scripts work together.
+- **[Python Code Documentation](docs/CODE_DOCUMENTATION.md)** – Describes the purpose, inputs and outputs of the project's Python files.
+
+## 10. Limitations
 
 The current prototype is a research demonstration, not a certified medical device.
 
@@ -117,7 +124,7 @@ Its estimates can be affected by lighting, movement, camera frame rate, skin app
 
 Independent reference-device validation is required before making clinical accuracy claims.
 
-## 10. Future Development
+## 11. Future Development
 
 Planned development includes:
 
@@ -127,7 +134,7 @@ Planned development includes:
 - Research into blood pressure estimation.
 - Exploring mobile deployment.
 
-## 11. Team
+## 12. Team
 
 **SignalPioneers**
 
