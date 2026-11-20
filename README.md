@@ -78,23 +78,74 @@ The current prototype includes:
 
 ### Requirements
 
-Python 3 and the required packages listed in `requirements.txt`.
+Before running FaceVitals, make sure you have:
 
-Install dependencies:
+- Windows 10/11 or another supported operating system.
+- Python 3 installed (use a version compatible with the packages in `requirements.txt`).
+- Git installed.
+- A working webcam.
+- The MediaPipe Face Landmarker model file: `face_landmarker.task`.
+
+### Step 1: Clone the Repository
+
+Open a terminal and run:
 
 ```bash
-pip install -r requirements.txt
+git clone https://github.com/SignalPioneers/FaceVitals.git
 ```
 
-Ensure that the MediaPipe Face Landmarker model file, `face_landmarker.task`, is available in the project directory.
+Move into the project directory:
 
-### Run the Application
+```bash
+cd FaceVitals
+```
+
+### Step 2: Create a Virtual Environment
+
+```bash
+python -m venv .venv
+```
+
+Activate it on Windows PowerShell:
+
+```powershell
+.venv\Scripts\Activate.ps1
+```
+
+### Step 3: Install Dependencies
+
+Upgrade pip:
+
+```bash
+python -m pip install --upgrade pip
+```
+
+Install the required packages:
+
+```bash
+python -m pip install -r requirements.txt
+```
+
+### Step 4: Check the MediaPipe Model
+
+Ensure that `face_landmarker.task` is available in the project root directory, where the application expects it.
+
+### Step 5: Run the Application
 
 ```bash
 python facevitals_app.py
 ```
 
-Start the camera using the START button, allow the system time to collect video frames, and observe the estimated heart rate and signal quality indicators.
+Click the **START** button to activate the webcam and begin real-time heart rate estimation. Allow the system time to collect video frames before observing the estimated heart rate and signal quality indicators.
+
+Click **STOP** to stop the measurement.
+
+### Troubleshooting
+
+- If a required Python module is missing, activate the virtual environment and reinstall dependencies.
+- If the webcam does not start, check camera permissions and ensure that no other application is using it.
+- If the MediaPipe model cannot be found, confirm that `face_landmarker.task` is in the expected project directory.
+
 
 ## 8. Project Structure
 
