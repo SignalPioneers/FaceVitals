@@ -1,70 +1,72 @@
-# FaceVitals – Development Progress Report
+# FaceVitals – Development Progress Log
 
-**Date:** 20 November 2026  
-**Team:** SignalPioneers – IEEE 2027 Signal Processing Cup  
-**Stage:** Baseline POS Offline Video Processing
+**Project:** FaceVitals  
+**Team:** SignalPioneers – IEEE Signal Processing Cup 2027  
+**Update date:** 24 November 2026  
+**Status:** Integrated prototype; heart-rate accuracy is still under validation.
 
-## 1. Completed Work
+## 1. Work completed
 
-The team has successfully implemented and executed an offline video-processing pipeline using Python, OpenCV, MediaPipe and the POS algorithm.
+- Integrated a Tkinter application interface for FaceVitals.
+- Added webcam input.
+- Added video-file upload for offline testing.
+- Integrated MediaPipe Face Landmarker for face detection and facial-region tracking.
+- Defined three facial regions of interest (ROIs): forehead, left cheek, and right cheek.
+- Added RGB signal extraction from the facial regions.
+- Integrated POS-based signal processing and heart-rate estimation.
+- Integrated CHROM-based signal processing and heart-rate estimation.
+- Added regional POS and CHROM results and confidence/status indicators.
+- Added a combined result that is displayed only when POS and CHROM estimates meet the application's agreement and confidence checks.
+- Added CSV export of recorded measurements and signal-related results.
+- Corrected the MediaPipe video timestamp handling so timestamps are intended to increase monotonically across frames and source sessions.
 
-The new script `extract_rgb_from_video.py` processes recorded video files without requiring a live webcam.
+## 2. Current application outputs
 
-## 2. Baseline Video
+The application is designed to show:
 
-- File: `baseline.mp4`
-- Resolution: 1920 × 1080
-- Frame rate: approximately 29.99 FPS
-- Duration: 120.06 seconds
-- Total frames processed: 3,601
-- Face detection rate: 100%
-- Valid RGB extraction rate: 100%
+- POS heart-rate estimate.
+- CHROM heart-rate estimate.
+- Regional estimates for forehead, left cheek, and right cheek.
+- Confidence/status information.
+- Final combined BPM when the POS and CHROM estimates pass the application's checks.
+- CSV output for later analysis.
 
-## 3. Processing Results
+## 3. Validation observation – important limitation
 
-| Processing stage | Result |
-|---|---|
-| Offline RGB extraction | Successful |
-| RGB resampling | Successful at 30 Hz |
-| POS processing | Successful for all three ROIs |
-| Bandpass filtering | Successful |
-| Heart-rate estimation | Successful |
+A recent test was performed using a video with a reference pulse-rate value of **104 PR**. FaceVitals displayed **60.4 BPM**.
 
-### POS Heart Rate Results
+- Reference: 104 PR
+- FaceVitals result: 60.4 BPM
+- Difference: 43.6 BPM lower than the reference
 
-| Region | Smoothed HR | Confidence | Status |
-|---|---:|---:|---|
-| Forehead | 58.89 BPM | 0.487 | OK |
-| Left Cheek | 59.77 BPM | 0.297 | Low confidence |
-| Right Cheek | 55.37 BPM | 0.486 | OK |
+This is a significant mismatch. It means the current output must **not** be treated as a validated or reliable heart-rate measurement.
 
-**Combined POS HR: 57.13 BPM (status: OK).**
+The application is currently an engineering prototype. The result from this single test does not establish the overall performance of the system, but it clearly shows that more algorithm debugging and validation are required.
 
-The system generated 111 rolling heart-rate estimates.
+## 4. Work still required
 
-Confidence is a spectral quality score, not a probability of correctness. These results have not yet been validated against a synchronized reference pulse oximeter or ECG.
+1. Verify that the reference pulse-rate value and video recording correspond to the same time interval.
+2. Inspect the extracted RGB traces from forehead and cheeks for motion, lighting changes, and weak skin-signal quality.
+3. Review POS and CHROM implementation details, including normalization, filtering, windowing, and sampling frequency.
+4. Review the heart-rate frequency selection and confidence calculation to identify possible wrong-peak selection.
+5. Compare POS, CHROM, and combined estimates against a pulse oximeter during synchronized recordings.
+6. Record several tests under controlled lighting and with minimal head movement.
+7. Only describe the system as validated after sufficient reference comparisons show acceptable agreement.
 
-## 4. Generated Outputs
+## 5. Important notes for the team
 
-- `rgb_signals.csv`
-- `rgb_signals_resampled.csv`
-- `pos_signals.csv`
-- `pos_signals_complete.png`
-- `filtered_signals.csv`
-- `filtered_signals.png`
-- `heart_rate_results.csv`
-- `heart_rate_spectrum.png`
+- A visible BPM value does not automatically mean that the value is accurate.
+- The combined BPM is an algorithmic estimate, not a medical measurement.
+- Confidence/status indicators are software quality indicators and are not yet clinically calibrated.
+- Do not use FaceVitals for diagnosis or medical decisions.
+- Keep the validation results, including failed tests, in the project records.
 
-## 5. Next Activities
+## 6. Current status summary
 
-1. Preserve the baseline results.
-2. Process `C1_low_50_v2.mj2` using the offline pipeline.
-3. Process the other C1 brightness conditions.
-4. Compare heart-rate estimates and signal quality against baseline.
-5. Obtain synchronized reference measurements for validation.
+**Application integration:** Implemented in the current prototype.  
+**Webcam and video input:** Implemented; runtime testing should continue.  
+**POS and CHROM outputs:** Integrated; numerical accuracy remains under investigation.  
+**Combined BPM:** Implemented with software checks; not yet validated.  
+**CSV export:** Implemented in the application.  
+**Reference validation:** In progress; a significant mismatch has been observed.
 
-**Important experimental note:** The current C1 low-light videos were generated through digital brightness attenuation. They are simulated low-light stress-test videos, not recordings verified at a physical illuminance of 50 lux or below.
-
-## 6. Current Project Status
-
-The baseline offline POS pipeline is operational. The next planned activity is the C1 50% brightness experiment.
