@@ -74,6 +74,11 @@ video_frame_index = 0
 video_path = None
 record_rows = []
 camera_times = deque(maxlen=60)
+after_id = None
+stable_final_readings = deque(maxlen=8)
+last_hr_signature = None
+last_reliable_result = None
+auto_stop_requested = False
 
 pos_window = int(round(FS_DEFAULT * POS_WINDOW_SECONDS))
 hr_window = int(round(FS_DEFAULT * HR_WINDOW_SECONDS))
@@ -570,6 +575,7 @@ def save_results():
 # ============================================================
 
 def process_frame(frame, elapsed_seconds, actual_fps):
+    global last_hr_signature, last_reliable_result, auto_stop_requested
     rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
 
@@ -661,6 +667,19 @@ def process_frame(frame, elapsed_seconds, actual_fps):
         final_hr_label.config(text=f"{final_hr:.1f} BPM")
         final_confidence_label.config(text=f"Confidence: {final_conf:.3f}")
         final_status_label.config(text=f"Status: {final_status}", fg="#00D084")
+        last_reliable_result = (final_hr, final_conf)
+        signature = tuple(
+            (region_states[name]["pos_last_update"], region_states[name]["chrom_last_update"])
+            for name in REGIONS
+        )
+        if signature != last_hr_signature:
+            stable_final_readings.append(float(final_hr))
+            last_hr_signature = signature
+        if len(stable_final_readings) == stable_final_readings.maxlen:
+            readings = np.asarray(stable_final_readings, dtype=float)
+            if (np.max(readings) - np.min(readings) <= 5.0
+                    and np.std(readings) <= 2.5):
+                auto_stop_requested = True
     else:
         final_hr_label.config(text="-- BPM")
         final_confidence_label.config(text="Confidence: --")
@@ -733,7 +752,8 @@ def show_frame(frame):
 
 
 def source_update():
-    global source_running, capture, video_frame_index
+    global source_running, capture, video_frame_index, after_id, auto_stop_requested
+    after_id = None
 
     if not source_running or capture is None:
         return
@@ -764,11 +784,17 @@ def source_update():
 
     processed = process_frame(frame, elapsed, actual_fps)
     show_frame(processed)
-    root.after(delay, source_update)
+    if auto_stop_requested and source_mode == "camera":
+        auto_stop_requested = False
+        stop_source(auto_completed=True)
+        return
+    if source_running:
+        after_id = root.after(delay, source_update)
 
 
 def start_camera():
     global capture, source_mode, source_running, session_start
+    global stable_final_readings, last_hr_signature, last_reliable_result, auto_stop_requested
 
     if source_running:
         stop_source()
@@ -781,6 +807,10 @@ def start_camera():
 
     configure_sampling(FS_DEFAULT)
     reset_all_regions()
+    stable_final_readings.clear()
+    last_hr_signature = None
+    last_reliable_result = None
+    auto_stop_requested = False
     record_rows.clear()
     camera_times.clear()
     capture = cap
@@ -795,6 +825,7 @@ def start_camera():
 def upload_video():
     global capture, source_mode, source_running, source_fps
     global video_frame_index, video_path
+    global stable_final_readings, last_hr_signature, last_reliable_result, auto_stop_requested
 
     path = filedialog.askopenfilename(
         title="Select a video for FaceVitals analysis",
@@ -826,6 +857,10 @@ def upload_video():
 
     configure_sampling(fps)
     reset_all_regions()
+    stable_final_readings.clear()
+    last_hr_signature = None
+    last_reliable_result = None
+    auto_stop_requested = False
     record_rows.clear()
     camera_times.clear()
     capture = cap
@@ -839,14 +874,32 @@ def upload_video():
     source_update()
 
 
-def stop_source():
-    global capture, source_running
+def stop_source(auto_completed=False):
+    global capture, source_running, after_id
     source_running = False
+    if after_id is not None:
+        try:
+            root.after_cancel(after_id)
+        except tk.TclError:
+            pass
+        after_id = None
     if capture is not None:
         capture.release()
         capture = None
-    camera_label.config(image="", text="Source is stopped")
+    camera_label.config(image="", text="Measurement complete" if auto_completed else "Source is stopped")
     camera_label.image = None
+    if auto_completed:
+        final_status_label.config(
+            text="Status: Stable measurement reached — stopped automatically",
+            fg="#00D084"
+        )
+    elif last_reliable_result is not None:
+        bpm, confidence = last_reliable_result
+        final_hr_label.config(text=f"{bpm:.1f} BPM")
+        final_confidence_label.config(text=f"Last confidence: {confidence:.3f}")
+        final_status_label.config(text="Status: Stopped — showing last reliable reading", fg="#FFC857")
+    else:
+        final_status_label.config(text="Status: Stopped — no reliable result yet", fg="#FFC857")
 
 
 # ============================================================
