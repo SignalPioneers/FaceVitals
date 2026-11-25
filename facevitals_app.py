@@ -79,10 +79,7 @@ video_path = None
 record_rows = []
 camera_times = deque(maxlen=60)
 after_id = None
-stable_final_readings = deque(maxlen=5)
-last_hr_signature = None
 last_reliable_result = None
-auto_stop_requested = False
 
 pos_window = int(round(FS_DEFAULT * POS_WINDOW_SECONDS))
 hr_window = int(round(FS_DEFAULT * HR_WINDOW_SECONDS))
@@ -504,10 +501,8 @@ def update_region_estimates(region):
             state["pos_hr"], state["pos_raw_hr"] = hr, hr
             state["pos_confidence"], state["pos_status"] = conf, status
             state["pos_last_good_time"] = time.monotonic()
-        else:
-            # Preserve the last numeric estimate for display, but mark it invalid
-            # for combination as soon as the current signal fails quality checks.
-            state["pos_confidence"], state["pos_status"] = conf, status
+        # If this update fails a quality check, retain the last accepted estimate
+        # and its confidence briefly; a single noisy window must not blank the UI.
         state["pos_previous_hr"] = previous
         state["pos_pending_hr"], state["pos_pending_count"] = pending, pending_count
         state["pos_peak_diagnostics"], state["pos_autocorr_bpm"] = signal_diagnostics(state["pos_filtered"])
@@ -525,8 +520,8 @@ def update_region_estimates(region):
             state["chrom_hr"], state["chrom_raw_hr"] = hr, hr
             state["chrom_confidence"], state["chrom_status"] = conf, status
             state["chrom_last_good_time"] = time.monotonic()
-        else:
-            state["chrom_confidence"], state["chrom_status"] = conf, status
+        # If this update fails a quality check, retain the last accepted estimate
+        # and its confidence briefly; a single noisy window must not blank the UI.
         state["chrom_previous_hr"] = previous
         state["chrom_pending_hr"], state["chrom_pending_count"] = pending, pending_count
         state["chrom_peak_diagnostics"], state["chrom_autocorr_bpm"] = signal_diagnostics(state["chrom_filtered"])
@@ -553,7 +548,7 @@ def get_algorithm_combined(key):
         else:
             is_fresh = (
                 last_good_time is not None
-                and (now - last_good_time) <= 2.5
+                and (now - last_good_time) <= 5.0
             )
 
         if (hr is not None and is_fresh
@@ -696,7 +691,7 @@ def save_results():
 # ============================================================
 
 def process_frame(frame, elapsed_seconds, actual_fps):
-    global last_hr_signature, last_reliable_result, auto_stop_requested
+    global last_reliable_result
     rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
 
@@ -821,28 +816,13 @@ def process_frame(frame, elapsed_seconds, actual_fps):
         final_status_label.config(text=f"Status: {final_status}", fg=status_color)
         # Keep the most recent displayed estimate available after the source stops.
         last_reliable_result = (final_hr, final_conf)
-        signature = tuple(
-            (region_states[name]["pos_last_good_time"], region_states[name]["chrom_last_good_time"])
-            for name in REGIONS
-        )
-        if signature != last_hr_signature:
-            stable_final_readings.append(float(final_hr))
-            last_hr_signature = signature
-        # Short webcam auto-stop: five consecutive fresh estimates (~5 seconds)
-        # within an 8 BPM range. Uploaded videos are never auto-stopped here.
-        if source_mode == "camera" and len(stable_final_readings) == stable_final_readings.maxlen:
-            readings = np.asarray(stable_final_readings, dtype=float)
-            if (np.max(readings) - np.min(readings) <= 8.0
-                    and np.std(readings) <= 3.5):
-                auto_stop_requested = True
+        # Keep measuring until the user presses STOP or closes the window.
     else:
         # Never leave an old or single-algorithm estimate presented as current.
         final_hr_label.config(text="-- BPM")
         final_confidence_label.config(text="Confidence: --")
         final_status_label.config(text=f"Status: {final_status}", fg="#FFC857")
         last_reliable_result = None
-        stable_final_readings.clear()
-        last_hr_signature = None
 
     for region in REGIONS:
         state = region_states[region]
@@ -917,7 +897,7 @@ def show_frame(frame):
 
 
 def source_update():
-    global source_running, capture, video_frame_index, after_id, auto_stop_requested
+    global source_running, capture, video_frame_index, after_id
     after_id = None
 
     if not source_running or capture is None:
@@ -949,17 +929,13 @@ def source_update():
 
     processed = process_frame(frame, elapsed, actual_fps)
     show_frame(processed)
-    if auto_stop_requested and source_mode == "camera":
-        auto_stop_requested = False
-        stop_source(auto_completed=True)
-        return
     if source_running:
         after_id = root.after(delay, source_update)
 
 
 def start_camera():
     global capture, source_mode, source_running, session_start
-    global stable_final_readings, last_hr_signature, last_reliable_result, auto_stop_requested
+    global last_reliable_result
 
     if source_running:
         stop_source()
@@ -977,10 +953,7 @@ def start_camera():
 
     configure_sampling(FS_DEFAULT)
     reset_all_regions()
-    stable_final_readings.clear()
-    last_hr_signature = None
     last_reliable_result = None
-    auto_stop_requested = False
     record_rows.clear()
     camera_times.clear()
     capture = cap
@@ -995,7 +968,7 @@ def start_camera():
 def upload_video():
     global capture, source_mode, source_running, source_fps
     global video_frame_index, video_path
-    global stable_final_readings, last_hr_signature, last_reliable_result, auto_stop_requested
+    global last_reliable_result
 
     path = filedialog.askopenfilename(
         title="Select a video for FaceVitals analysis",
@@ -1027,10 +1000,7 @@ def upload_video():
 
     configure_sampling(fps)
     reset_all_regions()
-    stable_final_readings.clear()
-    last_hr_signature = None
     last_reliable_result = None
-    auto_stop_requested = False
     record_rows.clear()
     camera_times.clear()
     capture = cap
@@ -1044,7 +1014,7 @@ def upload_video():
     source_update()
 
 
-def stop_source(auto_completed=False):
+def stop_source():
     global capture, source_running, after_id
     source_running = False
     if after_id is not None:
@@ -1056,14 +1026,9 @@ def stop_source(auto_completed=False):
     if capture is not None:
         capture.release()
         capture = None
-    camera_label.config(image="", text="Measurement complete" if auto_completed else "Source is stopped")
+    camera_label.config(image="", text="Source is stopped")
     camera_label.image = None
-    if auto_completed:
-        final_status_label.config(
-            text="Status: Stable estimate reached — stopped automatically",
-            fg="#00D084"
-        )
-    elif last_reliable_result is not None:
+    if last_reliable_result is not None:
         bpm, confidence = last_reliable_result
         final_hr_label.config(text=f"{bpm:.1f} BPM")
         final_confidence_label.config(text=f"Last confidence: {confidence:.3f}")
