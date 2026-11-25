@@ -135,6 +135,8 @@ def create_region_state():
         "chrom_sample_count": 0,
         "pos_last_update": 0,
         "chrom_last_update": 0,
+        "pos_last_good_time": None,
+        "chrom_last_good_time": None,
         "pos_peak_diagnostics": "", "chrom_peak_diagnostics": "",
         "pos_autocorr_bpm": None, "chrom_autocorr_bpm": None,
     }
@@ -424,8 +426,12 @@ def update_region_estimates(region):
             state["pos_filtered"], state["pos_history"], state["pos_previous_hr"],
             state["pos_pending_hr"], state["pos_pending_count"]
         )
-        state["pos_hr"], state["pos_raw_hr"] = hr, hr
-        state["pos_confidence"], state["pos_status"] = conf, status
+        if hr is not None:
+            state["pos_hr"], state["pos_raw_hr"] = hr, hr
+            state["pos_confidence"], state["pos_status"] = conf, status
+            state["pos_last_good_time"] = time.monotonic()
+        elif state["pos_hr"] is None:
+            state["pos_confidence"], state["pos_status"] = conf, status
         state["pos_previous_hr"] = previous
         state["pos_pending_hr"], state["pos_pending_count"] = pending, pending_count
         state["pos_peak_diagnostics"], state["pos_autocorr_bpm"] = signal_diagnostics(state["pos_filtered"])
@@ -439,8 +445,12 @@ def update_region_estimates(region):
             state["chrom_filtered"], state["chrom_history"], state["chrom_previous_hr"],
             state["chrom_pending_hr"], state["chrom_pending_count"]
         )
-        state["chrom_hr"], state["chrom_raw_hr"] = hr, hr
-        state["chrom_confidence"], state["chrom_status"] = conf, status
+        if hr is not None:
+            state["chrom_hr"], state["chrom_raw_hr"] = hr, hr
+            state["chrom_confidence"], state["chrom_status"] = conf, status
+            state["chrom_last_good_time"] = time.monotonic()
+        elif state["chrom_hr"] is None:
+            state["chrom_confidence"], state["chrom_status"] = conf, status
         state["chrom_previous_hr"] = previous
         state["chrom_pending_hr"], state["chrom_pending_count"] = pending, pending_count
         state["chrom_peak_diagnostics"], state["chrom_autocorr_bpm"] = signal_diagnostics(state["chrom_filtered"])
@@ -455,7 +465,10 @@ def get_algorithm_combined(key):
         hr = state[f"{key}_hr"]
         conf = state[f"{key}_confidence"]
         status = state[f"{key}_status"]
-        if hr is not None and conf >= CONFIDENCE_THRESHOLD and status == "OK":
+        last_good_time = state[f"{key}_last_good_time"]
+        is_fresh = last_good_time is not None and (time.monotonic() - last_good_time) <= 3.0
+        if (hr is not None and is_fresh
+                and conf >= CONFIDENCE_THRESHOLD and status == "OK"):
             values.append(hr)
             confidences.append(conf)
     if len(values) < 2 or (max(values) - min(values)) > 12.0:
@@ -619,15 +632,15 @@ def process_frame(frame, elapsed_seconds, actual_fps):
                 process_pos(region, mean_rgb)
                 process_chrom(region, mean_rgb)
                 update_region_estimates(region)
-            else:
-                region_states[region] = create_region_state()
+            # Keep the rolling signal state through brief ROI extraction dropouts.
+            # Resetting here discarded the 10-second POS/CHROM windows and caused flicker.
 
         cv2.putText(
             frame, "FACE DETECTED", (18, 28),
             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2
         )
     else:
-        reset_all_regions()
+        # A missed face frame is temporary; do not erase all accumulated signal windows.
         cv2.putText(
             frame, "NO FACE DETECTED", (18, 28),
             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2
@@ -669,7 +682,7 @@ def process_frame(frame, elapsed_seconds, actual_fps):
         final_status_label.config(text=f"Status: {final_status}", fg="#00D084")
         last_reliable_result = (final_hr, final_conf)
         signature = tuple(
-            (region_states[name]["pos_last_update"], region_states[name]["chrom_last_update"])
+            (region_states[name]["pos_last_good_time"], region_states[name]["chrom_last_good_time"])
             for name in REGIONS
         )
         if signature != last_hr_signature:
