@@ -434,8 +434,10 @@ def estimate_hr_from_signal(signal_values, history, previous_hr, pending_hr, pen
     best_lag = min_lag + int(np.argmax(lag_range))
     autocorr_hr = float(60.0 * session_fs / best_lag)
     autocorr_quality = float(autocorr[best_lag])
-    if autocorr_quality < 0.15 or abs(raw_hr - autocorr_hr) > 12.0:
-        return None, min(0.29, max(0.0, autocorr_quality)), "Ambiguous HR signal", previous_hr, pending_hr, pending_count
+    # Keep autocorrelation as a diagnostic rather than a hard rejection gate.
+    # In short/noisy rPPG windows its strongest lag can differ from the FFT
+    # fundamental even when the spectral estimate is usable. The FFT
+    # confidence and multi-region agreement checks below remain active.
 
     total_power = float(np.sum(power[valid]))
     if total_power <= 1e-12:
