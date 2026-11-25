@@ -460,20 +460,50 @@ def update_region_estimates(region):
 def get_algorithm_combined(key):
     values = []
     confidences = []
+    now = time.monotonic()
+
     for region in REGIONS:
         state = region_states[region]
         hr = state[f"{key}_hr"]
         conf = state[f"{key}_confidence"]
         status = state[f"{key}_status"]
         last_good_time = state[f"{key}_last_good_time"]
-        is_fresh = last_good_time is not None and (time.monotonic() - last_good_time) <= 3.0
+
+        # Uploaded videos are processed frame-by-frame and their final
+        # regional estimates remain valid at EOF. For live webcam, reject
+        # estimates that have not been refreshed recently.
+        if source_mode == "video":
+            is_fresh = last_good_time is not None
+        else:
+            is_fresh = (
+                last_good_time is not None
+                and (now - last_good_time) <= 5.0
+            )
+
         if (hr is not None and is_fresh
                 and conf >= CONFIDENCE_THRESHOLD and status == "OK"):
-            values.append(hr)
-            confidences.append(conf)
-    if len(values) < 2 or (max(values) - min(values)) > 12.0:
+            values.append(float(hr))
+            confidences.append(float(conf))
+
+    if len(values) < 2:
         return None, None
-    return float(np.median(values)), float(np.median(confidences))
+
+    # Compare each region with the median instead of rejecting the whole
+    # algorithm because one region is an outlier.
+    center = float(np.median(values))
+    inlier_indices = [
+        index for index, value in enumerate(values)
+        if abs(value - center) <= 12.0
+    ]
+    if len(inlier_indices) < 2:
+        return None, None
+
+    accepted_values = [values[index] for index in inlier_indices]
+    accepted_confidences = [confidences[index] for index in inlier_indices]
+    return (
+        float(np.median(accepted_values)),
+        float(np.median(accepted_confidences)),
+    )
 
 
 # ============================================================
