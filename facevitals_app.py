@@ -419,8 +419,8 @@ def estimate_hr_from_signal(signal_values, history, previous_hr, pending_hr, pen
     peak_frequency = frequencies[peak_index]
     raw_hr = float(peak_frequency * 60.0)
 
-    # Independent periodicity check: reject a spectral peak that disagrees
-    # with the strongest plausible autocorrelation period.
+    # Calculate an independent periodicity diagnostic. It is not used as
+    # a hard gate because short rPPG windows can produce a different lag.
     centered = signal - np.mean(signal)
     autocorr = np.correlate(centered, centered, mode="full")[len(centered) - 1:]
     if autocorr[0] <= 1e-12:
