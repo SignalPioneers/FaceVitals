@@ -502,7 +502,9 @@ def update_region_estimates(region):
             state["pos_hr"], state["pos_raw_hr"] = hr, hr
             state["pos_confidence"], state["pos_status"] = conf, status
             state["pos_last_good_time"] = time.monotonic()
-        elif state["pos_hr"] is None:
+        else:
+            # Preserve the last numeric estimate for display, but mark it invalid
+            # for combination as soon as the current signal fails quality checks.
             state["pos_confidence"], state["pos_status"] = conf, status
         state["pos_previous_hr"] = previous
         state["pos_pending_hr"], state["pos_pending_count"] = pending, pending_count
@@ -521,7 +523,7 @@ def update_region_estimates(region):
             state["chrom_hr"], state["chrom_raw_hr"] = hr, hr
             state["chrom_confidence"], state["chrom_status"] = conf, status
             state["chrom_last_good_time"] = time.monotonic()
-        elif state["chrom_hr"] is None:
+        else:
             state["chrom_confidence"], state["chrom_status"] = conf, status
         state["chrom_previous_hr"] = previous
         state["chrom_pending_hr"], state["chrom_pending_count"] = pending, pending_count
