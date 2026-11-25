@@ -81,7 +81,7 @@ camera_times = deque(maxlen=60)
 after_id = None
 last_reliable_result = None
 latest_elapsed_seconds = 0.0
-combined_history = deque(maxlen=5)
+combined_history = deque(maxlen=6)
 last_combined_history_second = -1
 
 pos_window = int(round(FS_DEFAULT * POS_WINDOW_SECONDS))
