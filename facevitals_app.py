@@ -347,6 +347,25 @@ def estimate_hr_from_signal(signal_values, history, previous_hr, pending_hr, pen
     peak_index = valid_indices[np.argmax(power[valid])]
     peak_frequency = frequencies[peak_index]
     raw_hr = float(peak_frequency * 60.0)
+
+    # Independent periodicity check: reject a spectral peak that disagrees
+    # with the strongest plausible autocorrelation period.
+    centered = signal - np.mean(signal)
+    autocorr = np.correlate(centered, centered, mode="full")[len(centered) - 1:]
+    if autocorr[0] <= 1e-12:
+        return None, 0.0, "Low signal", previous_hr, pending_hr, pending_count
+    autocorr = autocorr / autocorr[0]
+    min_lag = max(1, int(np.floor(session_fs / HIGH_HR)))
+    max_lag = min(len(centered) - 1, int(np.ceil(session_fs / LOW_HR)))
+    if max_lag <= min_lag:
+        return None, 0.0, "Insufficient signal", previous_hr, pending_hr, pending_count
+    lag_range = autocorr[min_lag:max_lag + 1]
+    best_lag = min_lag + int(np.argmax(lag_range))
+    autocorr_hr = float(60.0 * session_fs / best_lag)
+    autocorr_quality = float(autocorr[best_lag])
+    if autocorr_quality < 0.15 or abs(raw_hr - autocorr_hr) > 12.0:
+        return None, min(0.29, max(0.0, autocorr_quality)), "Ambiguous HR signal", previous_hr, pending_hr, pending_count
+
     total_power = float(np.sum(power[valid]))
     if total_power <= 1e-12:
         return None, 0.0, "Low signal", previous_hr, pending_hr, pending_count
