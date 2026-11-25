@@ -75,7 +75,7 @@ video_path = None
 record_rows = []
 camera_times = deque(maxlen=60)
 after_id = None
-stable_final_readings = deque(maxlen=8)
+stable_final_readings = deque(maxlen=5)
 last_hr_signature = None
 last_reliable_result = None
 auto_stop_requested = False
@@ -485,7 +485,7 @@ def get_algorithm_combined(key):
             values.append(float(hr))
             confidences.append(float(conf))
 
-    if len(values) < 2:
+    if len(values) < 1:
         return None, None
 
     # Compare each region with the median instead of rejecting the whole
@@ -495,7 +495,7 @@ def get_algorithm_combined(key):
         index for index, value in enumerate(values)
         if abs(value - center) <= 12.0
     ]
-    if len(inlier_indices) < 2:
+    if len(inlier_indices) < 1:
         return None, None
 
     accepted_values = [values[index] for index in inlier_indices]
@@ -691,25 +691,36 @@ def process_frame(frame, elapsed_seconds, actual_fps):
 
     final_hr = None
     final_conf = None
-    final_status = "Collecting reliable POS and CHROM estimates"
+    final_status = "Collecting POS / CHROM estimates"
 
     if not face_detected:
         final_status = "No face detected"
     elif pos_hr is not None and chrom_hr is not None:
         difference = abs(pos_hr - chrom_hr)
+        # Always show a combined estimate when both algorithms produce a
+        # usable value. Agreement affects the status/confidence, not visibility.
+        final_hr = float((pos_hr + chrom_hr) / 2.0)
+        agreement_factor = float(np.clip(1.0 - difference / 40.0, 0.35, 1.0))
+        final_conf = float(np.median([pos_conf, chrom_conf]) * agreement_factor)
         if difference <= MAX_ALGORITHM_DIFFERENCE:
-            final_hr = (pos_hr + chrom_hr) / 2.0
-            final_conf = float(np.median([pos_conf, chrom_conf]))
-            final_status = "Reliable estimate"
+            final_status = "Estimated BPM — POS and CHROM agree"
         else:
-            final_status = f"POS / CHROM disagree ({difference:.1f} BPM)"
-    elif pos_hr is not None or chrom_hr is not None:
-        final_status = "Waiting for both algorithms"
+            final_status = f"Estimated BPM — algorithms differ by {difference:.1f} BPM"
+    elif pos_hr is not None:
+        final_hr = float(pos_hr)
+        final_conf = float(pos_conf * 0.65)
+        final_status = "Estimated BPM — POS only; CHROM unavailable"
+    elif chrom_hr is not None:
+        final_hr = float(chrom_hr)
+        final_conf = float(chrom_conf * 0.65)
+        final_status = "Estimated BPM — CHROM only; POS unavailable"
 
     if final_hr is not None:
         final_hr_label.config(text=f"{final_hr:.1f} BPM")
-        final_confidence_label.config(text=f"Confidence: {final_conf:.3f}")
-        final_status_label.config(text=f"Status: {final_status}", fg="#00D084")
+        final_confidence_label.config(text=f"Estimated confidence: {final_conf:.3f}")
+        status_color = "#00D084" if "agree" in final_status else "#FFC857"
+        final_status_label.config(text=f"Status: {final_status}", fg=status_color)
+        # Keep the most recent displayed estimate available after the source stops.
         last_reliable_result = (final_hr, final_conf)
         signature = tuple(
             (region_states[name]["pos_last_good_time"], region_states[name]["chrom_last_good_time"])
@@ -718,14 +729,16 @@ def process_frame(frame, elapsed_seconds, actual_fps):
         if signature != last_hr_signature:
             stable_final_readings.append(float(final_hr))
             last_hr_signature = signature
-        if len(stable_final_readings) == stable_final_readings.maxlen:
+        # Short webcam auto-stop: five consecutive fresh estimates (~5 seconds)
+        # within an 8 BPM range. Uploaded videos are never auto-stopped here.
+        if source_mode == "camera" and len(stable_final_readings) == stable_final_readings.maxlen:
             readings = np.asarray(stable_final_readings, dtype=float)
-            if (np.max(readings) - np.min(readings) <= 5.0
-                    and np.std(readings) <= 2.5):
+            if (np.max(readings) - np.min(readings) <= 8.0
+                    and np.std(readings) <= 3.5):
                 auto_stop_requested = True
     else:
-        final_hr_label.config(text="-- BPM")
-        final_confidence_label.config(text="Confidence: --")
+        # Do not flash the displayed BPM to "--" during a brief signal dropout.
+        # Keep the last estimate visible and update only the status line.
         final_status_label.config(text=f"Status: {final_status}", fg="#FFC857")
 
     for region in REGIONS:
@@ -933,14 +946,14 @@ def stop_source(auto_completed=False):
     camera_label.image = None
     if auto_completed:
         final_status_label.config(
-            text="Status: Stable measurement reached — stopped automatically",
+            text="Status: Stable estimate reached — stopped automatically",
             fg="#00D084"
         )
     elif last_reliable_result is not None:
         bpm, confidence = last_reliable_result
         final_hr_label.config(text=f"{bpm:.1f} BPM")
         final_confidence_label.config(text=f"Last confidence: {confidence:.3f}")
-        final_status_label.config(text="Status: Stopped — showing last reliable reading", fg="#FFC857")
+        final_status_label.config(text="Status: Stopped — showing last available estimate", fg="#FFC857")
     else:
         final_status_label.config(text="Status: Stopped — no reliable result yet", fg="#FFC857")
 
