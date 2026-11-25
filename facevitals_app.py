@@ -910,7 +910,7 @@ def source_update():
 
     ret, frame = capture.read()
     if not ret:
-        stop_source()
+        stop_source(manual=False)
         if source_mode == "video":
             final_status_label.config(text="Status: Video analysis complete", fg="#00D084")
             messagebox.showinfo("Complete", "Video analysis has finished. You can save the CSV results.")
@@ -943,7 +943,7 @@ def start_camera():
     global last_reliable_result
 
     if source_running:
-        stop_source()
+        stop_source(manual=False)
 
     cap = cv2.VideoCapture(0)
     # Request HD/30 FPS when supported. Timestamp resampling below keeps
@@ -986,7 +986,7 @@ def upload_video():
         return
 
     if source_running:
-        stop_source()
+        stop_source(manual=False)
 
     cap = cv2.VideoCapture(path)
     if not cap.isOpened():
@@ -1019,7 +1019,7 @@ def upload_video():
     source_update()
 
 
-def stop_source():
+def stop_source(manual=True):
     global capture, source_running, after_id
     source_running = False
     if after_id is not None:
@@ -1033,6 +1033,13 @@ def stop_source():
         capture = None
     camera_label.config(image="", text="Source is stopped")
     camera_label.image = None
+    if not manual:
+        # Automatic EOF, source switching, and window closing should not open dialogs.
+        if last_reliable_result is not None and (time.monotonic() - last_reliable_result[2]) <= 5.0:
+            final_hr_label.config(text=f"{last_reliable_result[0]:.1f} BPM")
+            final_confidence_label.config(text=f"Last accepted confidence: {last_reliable_result[1]:.3f}")
+        return
+
     minimum_seconds = HR_WINDOW_SECONDS + POS_WINDOW_SECONDS
     result = last_reliable_result
     result_is_fresh = result is not None and (time.monotonic() - result[2]) <= 5.0
@@ -1048,9 +1055,9 @@ def stop_source():
         )
         messagebox.showinfo(
             "Measurement finalized",
-            f"Final accepted estimate: {bpm:.1f} BPM\\n"
-            f"Confidence: {confidence:.3f}\\n"
-            f"Measurement duration: {latest_elapsed_seconds:.1f} seconds\\n\\n"
+            f"Final accepted estimate: {bpm:.1f} BPM\n"
+            f"Confidence: {confidence:.3f}\n"
+            f"Measurement duration: {latest_elapsed_seconds:.1f} seconds\n\n"
             "This is an estimate, not a medical diagnosis."
         )
     else:
@@ -1064,7 +1071,7 @@ def stop_source():
         final_status_label.config(text="Status: Stopped — no reliable final result", fg="#FFC857")
         messagebox.showwarning(
             "No reliable final result",
-            reason + "\\n\\nKeep your face steady, use even lighting, and measure for at least "
+            reason + "\n\nKeep your face steady, use even lighting, and measure for at least "
             f"{minimum_seconds:.0f} seconds. Stop when POS, CHROM and Combined BPM are present."
         )
 
@@ -1091,7 +1098,7 @@ make_button("SAVE CSV", save_results, "#6C5CE7")
 
 
 def close_application():
-    stop_source()
+    stop_source(manual=False)
     try:
         landmarker.close()
     except Exception:
