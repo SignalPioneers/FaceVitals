@@ -830,6 +830,9 @@ def process_frame(frame, elapsed_seconds, actual_fps):
         last_reliable_result = (final_hr, final_conf, time.monotonic(), float(elapsed_seconds))
         # Keep measuring until the user presses STOP or closes the window.
     else:
+        # A gap breaks the stability streak; require five fresh seconds after recovery.
+        combined_history.clear()
+        last_combined_history_second = int(elapsed_seconds)
         # Hold the last accepted combined result briefly instead of flickering to blank.
         held = last_reliable_result
         if held is not None and (time.monotonic() - held[2]) <= 5.0:
@@ -1062,20 +1065,26 @@ def stop_source(manual=True):
     result = last_reliable_result
     result_is_fresh = result is not None and (time.monotonic() - result[2]) <= 5.0
     enough_data = latest_elapsed_seconds >= minimum_seconds
+    stable_at_stop = (
+        len(combined_history) == combined_history.maxlen
+        and (max(combined_history) - min(combined_history)) <= 5.0
+    )
 
     if result_is_fresh and enough_data:
         bpm, confidence, _accepted_at, accepted_elapsed = result
         final_hr_label.config(text=f"{bpm:.1f} BPM")
         final_confidence_label.config(text=f"Final accepted confidence: {confidence:.3f}")
+        stability_text = "stable for 5 seconds" if stable_at_stop else "not yet stable; treat as preliminary"
         final_status_label.config(
-            text=f"Status: Measurement stopped — final accepted estimate ({accepted_elapsed:.1f}s)",
-            fg="#00D084"
+            text=f"Status: Stopped — accepted estimate; {stability_text}",
+            fg="#00D084" if stable_at_stop else "#FFC857"
         )
         messagebox.showinfo(
             "Measurement finalized",
             f"Final accepted estimate: {bpm:.1f} BPM\n"
             f"Confidence: {confidence:.3f}\n"
-            f"Measurement duration: {latest_elapsed_seconds:.1f} seconds\n\n"
+            f"Measurement duration: {latest_elapsed_seconds:.1f} seconds\n"
+            f"Stability: {stability_text}\n\n"
             "This is an estimate, not a medical diagnosis."
         )
     else:
