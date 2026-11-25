@@ -293,8 +293,8 @@ def process_pos(region, rgb_values):
 def process_chrom(region, rgb_values):
     """
     CHROM is calculated over a rolling 1.6-second RGB window.
-    X and Y are bandpass-filtered; the center sample is emitted
-    to reduce the influence of the window edges.
+    X and Y are bandpass-filtered, then every window is overlap-added
+    to match the offline CHROM implementation.
     """
     state = region_states[region]
     state["chrom_rgb"].append(np.asarray(rgb_values, dtype=float))
