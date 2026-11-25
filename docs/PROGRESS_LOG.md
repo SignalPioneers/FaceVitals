@@ -2,7 +2,7 @@
 
 **Project:** FaceVitals  
 **Team:** SignalPioneers – IEEE Signal Processing Cup 2027  
-**Update date:** 24 November 2026  
+**Update date:** 25 November 2026  
 **Status:** Integrated prototype; heart-rate accuracy is still under validation.
 
 ## 1. Work completed
@@ -70,3 +70,14 @@ The application is currently an engineering prototype. The result from this sing
 **CSV export:** Implemented in the application.  
 **Reference validation:** In progress; a significant mismatch has been observed.
 
+
+
+## 7. Code corrections – 25 November 2026
+
+- Replaced the broad left/right cheek rectangles in the live application with MediaPipe FaceLandmarker cheek polygons. The cheek RGB average is now calculated only from skin-mask pixels inside the corresponding polygon, reducing accidental sampling across the nose.
+- Kept the forehead region as a separate conservative face-box ROI.
+- Added an autocorrelation periodicity check to the live app, POS offline heart-rate estimator, and CHROM offline heart-rate estimator.
+- When the dominant FFT estimate and the autocorrelation period disagree by more than 12 BPM, the estimate is rejected / marked low-confidence instead of being accepted into the rolling median. The live application displays an ambiguous-signal status rather than publishing that BPM.
+- A basic synthetic-signal check at 60–180 BPM showed close FFT/autocorrelation agreement for clean single-frequency signals. This is only a software sanity check; it does not demonstrate real-camera accuracy.
+
+**Important:** These changes reduce two known sources of error but do not prove that the 60.4 BPM versus 104 PR mismatch is solved. Motion artefacts, lighting variation, ROI placement, and peak-selection ambiguity can still produce an incorrect estimate. The next required test is a synchronized recording with a pulse oximeter, checking the same time interval.
