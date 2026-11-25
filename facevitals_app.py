@@ -773,10 +773,6 @@ def process_frame(frame, elapsed_seconds, actual_fps):
 
     pos_hr, pos_conf = get_algorithm_combined("pos")
     chrom_hr, chrom_conf = get_algorithm_combined("chrom")
-    if not face_detected:
-        pos_hr, pos_conf = None, None
-        chrom_hr, chrom_conf = None, None
-
     if pos_hr is not None:
         pos_total_label.config(text=f"{pos_hr:.1f} BPM")
     else:
@@ -791,9 +787,7 @@ def process_frame(frame, elapsed_seconds, actual_fps):
     final_conf = None
     final_status = "Collecting POS / CHROM estimates"
 
-    if not face_detected:
-        final_status = "No face detected"
-    elif pos_hr is not None and chrom_hr is not None:
+    if pos_hr is not None and chrom_hr is not None:
         difference = abs(pos_hr - chrom_hr)
         if difference <= MAX_ALGORITHM_DIFFERENCE:
             final_hr = float((pos_hr + chrom_hr) / 2.0)
@@ -804,6 +798,8 @@ def process_frame(frame, elapsed_seconds, actual_fps):
             final_status = (
                 f"No combined BPM — POS/CHROM disagree by {difference:.1f} BPM"
             )
+    elif not face_detected:
+        final_status = "Face temporarily not detected — holding recent valid estimates"
     else:
         final_status = (
             "No combined BPM — need two valid regions from both algorithms"
@@ -826,8 +822,8 @@ def process_frame(frame, elapsed_seconds, actual_fps):
 
     for region in REGIONS:
         state = region_states[region]
-        p = state["pos_hr"] if face_detected else None
-        c = state["chrom_hr"] if face_detected else None
+        p = state["pos_hr"]
+        c = state["chrom_hr"]
         p_text = f"{p:.1f}" if p is not None else "--"
         c_text = f"{c:.1f}" if c is not None else "--"
         region_labels[region].config(text=f"POS: {p_text} BPM | CHROM: {c_text} BPM")
@@ -839,7 +835,7 @@ def process_frame(frame, elapsed_seconds, actual_fps):
         )
         region_labels[region + "_status"].config(
             text=(
-                "No face detected" if not face_detected
+                "Face temporarily not detected" if not face_detected
                 else f"POS: {state['pos_status']} | CHROM: {state['chrom_status']}"
             )
         )
