@@ -119,6 +119,7 @@ def create_region_state():
         "chrom_filtered": deque(maxlen=hr_window),
         "rgb_time_buffer": deque(maxlen=2),
         "next_sample_time": None,
+        "last_rgb": None,
         "chrom_sos": butter(
             FILTER_ORDER, [LOW_HR, HIGH_HR],
             btype="bandpass", fs=session_fs, output="sos"
@@ -702,6 +703,7 @@ def process_frame(frame, elapsed_seconds, actual_fps):
     face_detected = bool(detection.face_landmarks)
     current_rgb = {}
     current_skin_ratios = {}
+    current_rgb_changes = {}
 
     if face_detected:
         landmarks = detection.face_landmarks[0]
@@ -726,15 +728,29 @@ def process_frame(frame, elapsed_seconds, actual_fps):
                     frame, (x1, y1), (x2 - 1, y2 - 1),
                     color=roi_color, thickness=2
                 )
+                rgb_change = current_rgb_changes.get(region)
+                change_text = (
+                    f" | RGB Δ {rgb_change:.1f}%"
+                    if rgb_change is not None else ""
+                )
                 cv2.putText(
-                    frame, f"{region} skin {skin_ratio:.0%}",
+                    frame, f"{region} skin {skin_ratio:.0%}{change_text}",
                     (x1, max(18, y1 - 5)),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.42, roi_color, 1
                 )
 
             if mean_rgb is not None:
                 current_rgb[region] = mean_rgb
+                previous_rgb = region_states[region]["last_rgb"]
+                if previous_rgb is not None:
+                    relative_change = (
+                        np.abs(mean_rgb - previous_rgb) /
+                        np.maximum(np.abs(previous_rgb), 1.0)
+                    )
+                    current_rgb_changes[region] = float(np.mean(relative_change) * 100.0)
                 process_timestamped_rgb(region, mean_rgb, elapsed_seconds)
+                # Keep this after resampling because a long dropout can reset the region state.
+                region_states[region]["last_rgb"] = np.asarray(mean_rgb, dtype=float)
             # Keep the rolling signal state through brief ROI extraction dropouts.
             # Resetting here discarded the 10-second POS/CHROM windows and caused flicker.
 
@@ -859,6 +875,7 @@ def process_frame(frame, elapsed_seconds, actual_fps):
         state = region_states[region]
         rgb = current_rgb.get(region)
         row[f"{region}_Skin_Ratio"] = current_skin_ratios.get(region, np.nan)
+        row[f"{region}_RGB_Change_Percent"] = current_rgb_changes.get(region, np.nan)
         row[f"{region}_R"] = float(rgb[0]) if rgb is not None else np.nan
         row[f"{region}_G"] = float(rgb[1]) if rgb is not None else np.nan
         row[f"{region}_B"] = float(rgb[2]) if rgb is not None else np.nan
@@ -986,11 +1003,11 @@ def upload_video():
         return
 
     fps = cap.get(cv2.CAP_PROP_FPS)
-    if not np.isfinite(fps) or fps < 10 or fps > 60:
+    if not np.isfinite(fps) or fps < 20 or fps > 60:
         cap.release()
         messagebox.showerror(
             "Unsupported Video FPS",
-            f"Detected video FPS: {fps:.2f}\nPlease use a video between 10 and 60 FPS."
+            f"Detected video FPS: {fps:.2f}\nPlease use a video between 20 and 60 FPS."
         )
         return
 
