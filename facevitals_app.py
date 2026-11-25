@@ -80,6 +80,7 @@ record_rows = []
 camera_times = deque(maxlen=60)
 after_id = None
 last_reliable_result = None
+latest_elapsed_seconds = 0.0
 
 pos_window = int(round(FS_DEFAULT * POS_WINDOW_SECONDS))
 hr_window = int(round(FS_DEFAULT * HR_WINDOW_SECONDS))
@@ -691,7 +692,8 @@ def save_results():
 # ============================================================
 
 def process_frame(frame, elapsed_seconds, actual_fps):
-    global last_reliable_result
+    global last_reliable_result, latest_elapsed_seconds
+    latest_elapsed_seconds = float(elapsed_seconds)
     rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
 
@@ -811,14 +813,21 @@ def process_frame(frame, elapsed_seconds, actual_fps):
         status_color = "#00D084" if "agree" in final_status else "#FFC857"
         final_status_label.config(text=f"Status: {final_status}", fg=status_color)
         # Keep the most recent displayed estimate available after the source stops.
-        last_reliable_result = (final_hr, final_conf)
+        last_reliable_result = (final_hr, final_conf, time.monotonic(), float(elapsed_seconds))
         # Keep measuring until the user presses STOP or closes the window.
     else:
-        # Never leave an old or single-algorithm estimate presented as current.
-        final_hr_label.config(text="-- BPM")
-        final_confidence_label.config(text="Confidence: --")
-        final_status_label.config(text=f"Status: {final_status}", fg="#FFC857")
-        last_reliable_result = None
+        # Hold the last accepted combined result briefly instead of flickering to blank.
+        held = last_reliable_result
+        if held is not None and (time.monotonic() - held[2]) <= 5.0:
+            final_hr_label.config(text=f"{held[0]:.1f} BPM")
+            final_confidence_label.config(text=f"Last accepted confidence: {held[1]:.3f}")
+            final_status_label.config(
+                text=f"Status: {final_status} — holding last accepted result", fg="#FFC857"
+            )
+        else:
+            final_hr_label.config(text="-- BPM")
+            final_confidence_label.config(text="Confidence: --")
+            final_status_label.config(text=f"Status: {final_status}", fg="#FFC857")
 
     for region in REGIONS:
         state = region_states[region]
@@ -1024,13 +1033,40 @@ def stop_source():
         capture = None
     camera_label.config(image="", text="Source is stopped")
     camera_label.image = None
-    if last_reliable_result is not None:
-        bpm, confidence = last_reliable_result
+    minimum_seconds = HR_WINDOW_SECONDS + POS_WINDOW_SECONDS
+    result = last_reliable_result
+    result_is_fresh = result is not None and (time.monotonic() - result[2]) <= 5.0
+    enough_data = latest_elapsed_seconds >= minimum_seconds
+
+    if result_is_fresh and enough_data:
+        bpm, confidence, _accepted_at, accepted_elapsed = result
         final_hr_label.config(text=f"{bpm:.1f} BPM")
-        final_confidence_label.config(text=f"Last confidence: {confidence:.3f}")
-        final_status_label.config(text="Status: Stopped — showing last available estimate", fg="#FFC857")
+        final_confidence_label.config(text=f"Final accepted confidence: {confidence:.3f}")
+        final_status_label.config(
+            text=f"Status: Measurement stopped — final accepted estimate ({accepted_elapsed:.1f}s)",
+            fg="#00D084"
+        )
+        messagebox.showinfo(
+            "Measurement finalized",
+            f"Final accepted estimate: {bpm:.1f} BPM\\n"
+            f"Confidence: {confidence:.3f}\\n"
+            f"Measurement duration: {latest_elapsed_seconds:.1f} seconds\\n\\n"
+            "This is an estimate, not a medical diagnosis."
+        )
     else:
-        final_status_label.config(text="Status: Stopped — no reliable result yet", fg="#FFC857")
+        final_hr_label.config(text="-- BPM")
+        final_confidence_label.config(text="Confidence: --")
+        reason = (
+            f"Measurement was shorter than the minimum analysis period ({minimum_seconds:.1f}s)."
+            if not enough_data else
+            "No recent POS + CHROM combined estimate passed the quality checks."
+        )
+        final_status_label.config(text="Status: Stopped — no reliable final result", fg="#FFC857")
+        messagebox.showwarning(
+            "No reliable final result",
+            reason + "\\n\\nKeep your face steady, use even lighting, and measure for at least "
+            f"{minimum_seconds:.0f} seconds. Stop when POS, CHROM and Combined BPM are present."
+        )
 
 
 # ============================================================
