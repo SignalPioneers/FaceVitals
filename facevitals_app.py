@@ -27,6 +27,10 @@ FILTER_ORDER = 4
 UPDATE_INTERVAL_SECONDS = 1.0
 MAX_ALGORITHM_DIFFERENCE = 10.0
 MAX_HR_JUMP = 20.0
+MIN_SKIN_RATIO = 0.10
+MAX_SAMPLE_GAP_SECONDS = 0.15
+MIN_VALID_REGIONS = 2
+MAX_REGION_SPREAD = 12.0
 
 # Forehead is a compact upper-face rectangle. Cheeks are rectangular
 # sampling regions positioned from eye, nose-tip and upper-lip landmarks.
@@ -110,7 +114,11 @@ def create_region_state():
         "pos_filter_zi": None,
         "pos_filtered": deque(maxlen=hr_window),
         "chrom_rgb": deque(maxlen=pos_window),
+        "chrom_overlap_sum": np.zeros(pos_window, dtype=float),
+        "chrom_overlap_count": np.zeros(pos_window, dtype=float),
         "chrom_filtered": deque(maxlen=hr_window),
+        "rgb_time_buffer": deque(maxlen=2),
+        "next_sample_time": None,
         "chrom_sos": butter(
             FILTER_ORDER, [LOW_HR, HIGH_HR],
             btype="bandpass", fs=session_fs, output="sos"
@@ -213,23 +221,24 @@ def extract_roi_rgb(rgb_frame, landmarks, bbox, region):
 
     roi_image = rgb_frame[y1:y2, x1:x2]
     if roi_image.size == 0:
-        return None, (x1, y1, x2, y2), None
+        return None, (x1, y1, x2, y2), None, 0.0
 
-    region_mask = np.full(roi_image.shape[:2], 255, dtype=np.uint8)
     skin_mask = create_skin_mask(roi_image)
-    combined_mask = cv2.bitwise_and(skin_mask, region_mask)
-    selected = combined_mask > 0
+    selected = skin_mask > 0
     skin_pixels = roi_image[selected]
+    total_pixels = int(roi_image.shape[0] * roi_image.shape[1])
+    skin_ratio = (len(skin_pixels) / total_pixels) if total_pixels else 0.0
+    minimum_pixels = max(20, int(total_pixels * MIN_SKIN_RATIO))
 
-    if len(skin_pixels) < 20:
-        return None, (x1, y1, x2, y2), None
-
-    mean_rgb = np.mean(skin_pixels, axis=0)
     outline = np.array(
         [[x1, y1], [x2 - 1, y1], [x2 - 1, y2 - 1], [x1, y2 - 1]],
         dtype=np.int32
     )
-    return mean_rgb, (x1, y1, x2, y2), outline
+    if len(skin_pixels) < minimum_pixels:
+        return None, (x1, y1, x2, y2), outline, skin_ratio
+
+    mean_rgb = np.mean(skin_pixels, axis=0)
+    return mean_rgb, (x1, y1, x2, y2), outline, skin_ratio
 
 def process_pos(region, rgb_values):
     state = region_states[region]
@@ -318,9 +327,70 @@ def process_chrom(region, rgb_values):
     chrom_signal = Xf - alpha * Yf
     chrom_signal -= np.mean(chrom_signal)
 
-    center = len(chrom_signal) // 2
-    state["chrom_filtered"].append(float(chrom_signal[center]))
+    # Match the offline CHROM implementation with overlap-add.
+    state["chrom_overlap_sum"] += chrom_signal
+    state["chrom_overlap_count"] += 1.0
+    count = state["chrom_overlap_count"][0]
+    if count <= 0:
+        return
+
+    chrom_sample = state["chrom_overlap_sum"][0] / count
+    state["chrom_overlap_sum"][:-1] = state["chrom_overlap_sum"][1:]
+    state["chrom_overlap_sum"][-1] = 0.0
+    state["chrom_overlap_count"][:-1] = state["chrom_overlap_count"][1:]
+    state["chrom_overlap_count"][-1] = 0.0
+
+    state["chrom_filtered"].append(float(chrom_sample))
     state["chrom_sample_count"] += 1
+
+
+def process_timestamped_rgb(region, rgb_values, sample_time):
+    """Resample RGB onto a uniform time grid before POS and CHROM processing."""
+    state = region_states[region]
+    buffer = state["rgb_time_buffer"]
+    rgb_values = np.asarray(rgb_values, dtype=float)
+
+    if buffer and sample_time <= buffer[-1][0]:
+        return
+
+    if buffer and (sample_time - buffer[-1][0]) > MAX_SAMPLE_GAP_SECONDS:
+        # Do not stitch pulse signals across a long face/ROI/camera dropout.
+        region_states[region] = create_region_state()
+        state = region_states[region]
+        buffer = state["rgb_time_buffer"]
+        buffer.append((float(sample_time), rgb_values))
+        state["next_sample_time"] = float(sample_time)
+        return
+
+    if not buffer:
+        buffer.append((float(sample_time), rgb_values))
+        state["next_sample_time"] = float(sample_time)
+        return
+
+    buffer.append((float(sample_time), rgb_values))
+    t0, rgb0 = buffer[0]
+    t1, rgb1 = buffer[1]
+
+    if state["next_sample_time"] is None:
+        state["next_sample_time"] = t0
+
+    step = 1.0 / session_fs
+    while state["next_sample_time"] <= t1 + 1e-9:
+        target_time = max(state["next_sample_time"], t0)
+        interval = t1 - t0
+        if interval <= 0 or interval > MAX_SAMPLE_GAP_SECONDS:
+            break
+
+        fraction = float(np.clip((target_time - t0) / interval, 0.0, 1.0))
+        uniform_rgb = rgb0 + fraction * (rgb1 - rgb0)
+        process_pos(region, uniform_rgb)
+        process_chrom(region, uniform_rgb)
+        update_region_estimates(region)
+        state["next_sample_time"] += step
+
+    newest = buffer[-1]
+    buffer.clear()
+    buffer.append(newest)
 
 
 # ============================================================
@@ -485,21 +555,23 @@ def get_algorithm_combined(key):
             values.append(float(hr))
             confidences.append(float(conf))
 
-    if len(values) < 1:
+    if len(values) < MIN_VALID_REGIONS:
         return None, None
 
-    # Compare each region with the median instead of rejecting the whole
-    # algorithm because one region is an outlier.
+    # Require at least two facial regions to agree before publishing an
+    # algorithm-level estimate.
     center = float(np.median(values))
     inlier_indices = [
         index for index, value in enumerate(values)
-        if abs(value - center) <= 12.0
+        if abs(value - center) <= MAX_REGION_SPREAD
     ]
-    if len(inlier_indices) < 1:
+    if len(inlier_indices) < MIN_VALID_REGIONS:
         return None, None
 
     accepted_values = [values[index] for index in inlier_indices]
     accepted_confidences = [confidences[index] for index in inlier_indices]
+    if max(accepted_values) - min(accepted_values) > MAX_REGION_SPREAD:
+        return None, None
     return (
         float(np.median(accepted_values)),
         float(np.median(accepted_confidences)),
@@ -629,6 +701,7 @@ def process_frame(frame, elapsed_seconds, actual_fps):
     detection = landmarker.detect_for_video(mp_image, timestamp_ms)
     face_detected = bool(detection.face_landmarks)
     current_rgb = {}
+    current_skin_ratios = {}
 
     if face_detected:
         landmarks = detection.face_landmarks[0]
@@ -641,27 +714,27 @@ def process_frame(frame, elapsed_seconds, actual_fps):
         )
 
         for region in REGIONS:
-            mean_rgb, coordinates, outline = extract_roi_rgb(
+            mean_rgb, coordinates, outline, skin_ratio = extract_roi_rgb(
                 rgb_frame, landmarks, bbox, region
             )
+            current_skin_ratios[region] = float(skin_ratio)
 
             if coordinates is not None:
                 x1, y1, x2, y2 = coordinates
-                if outline is not None:
-                    cv2.polylines(
-                        frame, [np.asarray(outline, dtype=np.int32)],
-                        isClosed=True, color=(255, 255, 0), thickness=2
-                    )
+                roi_color = (0, 200, 0) if mean_rgb is not None else (0, 0, 255)
+                cv2.rectangle(
+                    frame, (x1, y1), (x2 - 1, y2 - 1),
+                    color=roi_color, thickness=2
+                )
                 cv2.putText(
-                    frame, region, (x1, max(18, y1 - 5)),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.48, (255, 255, 0), 1
+                    frame, f"{region} skin {skin_ratio:.0%}",
+                    (x1, max(18, y1 - 5)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.42, roi_color, 1
                 )
 
             if mean_rgb is not None:
                 current_rgb[region] = mean_rgb
-                process_pos(region, mean_rgb)
-                process_chrom(region, mean_rgb)
-                update_region_estimates(region)
+                process_timestamped_rgb(region, mean_rgb, elapsed_seconds)
             # Keep the rolling signal state through brief ROI extraction dropouts.
             # Resetting here discarded the 10-second POS/CHROM windows and caused flicker.
 
@@ -697,23 +770,19 @@ def process_frame(frame, elapsed_seconds, actual_fps):
         final_status = "No face detected"
     elif pos_hr is not None and chrom_hr is not None:
         difference = abs(pos_hr - chrom_hr)
-        # Always show a combined estimate when both algorithms produce a
-        # usable value. Agreement affects the status/confidence, not visibility.
-        final_hr = float((pos_hr + chrom_hr) / 2.0)
-        agreement_factor = float(np.clip(1.0 - difference / 40.0, 0.35, 1.0))
-        final_conf = float(np.median([pos_conf, chrom_conf]) * agreement_factor)
         if difference <= MAX_ALGORITHM_DIFFERENCE:
+            final_hr = float((pos_hr + chrom_hr) / 2.0)
+            agreement_factor = float(np.clip(1.0 - difference / 40.0, 0.35, 1.0))
+            final_conf = float(np.median([pos_conf, chrom_conf]) * agreement_factor)
             final_status = "Estimated BPM — POS and CHROM agree"
         else:
-            final_status = f"Estimated BPM — algorithms differ by {difference:.1f} BPM"
-    elif pos_hr is not None:
-        final_hr = float(pos_hr)
-        final_conf = float(pos_conf * 0.65)
-        final_status = "Estimated BPM — POS only; CHROM unavailable"
-    elif chrom_hr is not None:
-        final_hr = float(chrom_hr)
-        final_conf = float(chrom_conf * 0.65)
-        final_status = "Estimated BPM — CHROM only; POS unavailable"
+            final_status = (
+                f"No combined BPM — POS/CHROM disagree by {difference:.1f} BPM"
+            )
+    else:
+        final_status = (
+            "No combined BPM — need two valid regions from both algorithms"
+        )
 
     if final_hr is not None:
         final_hr_label.config(text=f"{final_hr:.1f} BPM")
@@ -737,9 +806,13 @@ def process_frame(frame, elapsed_seconds, actual_fps):
                     and np.std(readings) <= 3.5):
                 auto_stop_requested = True
     else:
-        # Do not flash the displayed BPM to "--" during a brief signal dropout.
-        # Keep the last estimate visible and update only the status line.
+        # Never leave an old or single-algorithm estimate presented as current.
+        final_hr_label.config(text="-- BPM")
+        final_confidence_label.config(text="Confidence: --")
         final_status_label.config(text=f"Status: {final_status}", fg="#FFC857")
+        last_reliable_result = None
+        stable_final_readings.clear()
+        last_hr_signature = None
 
     for region in REGIONS:
         state = region_states[region]
@@ -761,6 +834,7 @@ def process_frame(frame, elapsed_seconds, actual_fps):
     row = {
         "Elapsed_Time_s": float(elapsed_seconds),
         "Source_FPS": float(actual_fps),
+        "Analysis_Sampling_Frequency_Hz": float(session_fs),
         "Face_Detected": bool(face_detected),
         "POS_Combined_BPM": pos_hr,
         "POS_Confidence": pos_conf,
@@ -781,6 +855,7 @@ def process_frame(frame, elapsed_seconds, actual_fps):
     for region in REGIONS:
         state = region_states[region]
         rgb = current_rgb.get(region)
+        row[f"{region}_Skin_Ratio"] = current_skin_ratios.get(region, np.nan)
         row[f"{region}_R"] = float(rgb[0]) if rgb is not None else np.nan
         row[f"{region}_G"] = float(rgb[1]) if rgb is not None else np.nan
         row[f"{region}_B"] = float(rgb[2]) if rgb is not None else np.nan
@@ -856,6 +931,11 @@ def start_camera():
         stop_source()
 
     cap = cv2.VideoCapture(0)
+    # Request HD/30 FPS when supported. Timestamp resampling below keeps
+    # the analysis clock correct even if the webcam driver ignores the hints.
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+    cap.set(cv2.CAP_PROP_FPS, FS_DEFAULT)
     if not cap.isOpened():
         cap.release()
         messagebox.showerror("Camera Error", "Could not access the webcam.")
