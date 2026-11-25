@@ -196,7 +196,7 @@ def extract_roi_rgb(rgb_frame, landmarks, bbox, region):
         # landmarks, 13 = upper lip. These landmarks adapt the ROIs to pose.
         required = (1, 13, 145, 374)
         if len(landmarks) <= max(required) or face_width <= 0 or face_height <= 0:
-            return None, None, None
+            return None, None, None, 0.0
 
         nose_x = float(landmarks[1].x) * width
         lower_eye_y = (
@@ -214,10 +214,10 @@ def extract_roi_rgb(rgb_frame, landmarks, bbox, region):
             x1 = max(0, int(nose_x + CHEEK_INNER_MARGIN * face_width))
             x2 = min(width, int(x_max - CHEEK_OUTER_MARGIN * face_width))
     else:
-        return None, None, None
+        return None, None, None, 0.0
 
     if x2 <= x1 or y2 <= y1:
-        return None, None, None
+        return None, None, None, 0.0
 
     roi_image = rgb_frame[y1:y2, x1:x2]
     if roi_image.size == 0:
@@ -751,6 +751,9 @@ def process_frame(frame, elapsed_seconds, actual_fps):
 
     pos_hr, pos_conf = get_algorithm_combined("pos")
     chrom_hr, chrom_conf = get_algorithm_combined("chrom")
+    if not face_detected:
+        pos_hr, pos_conf = None, None
+        chrom_hr, chrom_conf = None, None
 
     if pos_hr is not None:
         pos_total_label.config(text=f"{pos_hr:.1f} BPM")
