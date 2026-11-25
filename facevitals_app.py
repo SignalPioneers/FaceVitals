@@ -1044,6 +1044,7 @@ def upload_video():
 
 def stop_source(manual=True):
     global capture, source_running, after_id
+    stop_button.config(bg="#C0392B")
     source_running = False
     if after_id is not None:
         try:
