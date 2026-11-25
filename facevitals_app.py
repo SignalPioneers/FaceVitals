@@ -28,21 +28,14 @@ UPDATE_INTERVAL_SECONDS = 1.0
 MAX_ALGORITHM_DIFFERENCE = 10.0
 MAX_HR_JUMP = 20.0
 
-# Forehead remains a conservative face-box region. Cheeks use FaceLandmarker
-# polygons so the sampling mask does not extend across the nose.
+# Forehead is a compact upper-face rectangle. Cheeks are rectangular
+# sampling regions positioned from eye, nose-tip and upper-lip landmarks.
+# The inner cheek edges stay well outside the nose wings.
 FOREHEAD_ROI = (0.30, 0.08, 0.70, 0.27)
-CHEEK_LANDMARKS = {
-    # Image-left cheek (subject's right cheek), excluding the central nose.
-    "Left Cheek": [
-        50, 101, 118, 119, 120, 121, 128, 245, 188, 174, 134,
-        127, 234, 93, 132, 58, 172, 136, 150, 149, 176, 148
-    ],
-    # Image-right cheek (subject's left cheek), mirrored FaceMesh contour.
-    "Right Cheek": [
-        280, 330, 347, 348, 349, 350, 357, 465, 412, 399, 363,
-        356, 454, 323, 361, 288, 397, 365, 379, 378, 400, 377
-    ],
-}
+CHEEK_INNER_MARGIN = 0.13
+CHEEK_OUTER_MARGIN = 0.15
+CHEEK_TOP_MARGIN = 0.025
+CHEEK_BOTTOM_MARGIN = 0.075
 REGIONS = ["Forehead", "Left Cheek", "Right Cheek"]
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -171,68 +164,65 @@ def create_skin_mask(rgb_image):
 
 
 def extract_roi_rgb(rgb_frame, landmarks, bbox, region):
-    """Extract mean RGB from a skin-only forehead box or cheek landmark polygon."""
+    """Extract skin RGB from the forehead or a nose-excluding cheek rectangle."""
     height, width = rgb_frame.shape[:2]
+    x_min, y_min, x_max, y_max = bbox
+    face_width = x_max - x_min
+    face_height = y_max - y_min
 
     if region == "Forehead":
-        x_min, y_min, x_max, y_max = bbox
-        face_width = x_max - x_min
-        face_height = y_max - y_min
         rx1, ry1, rx2, ry2 = FOREHEAD_ROI
         x1 = max(0, int(x_min + rx1 * face_width))
         y1 = max(0, int(y_min + ry1 * face_height))
         x2 = min(width, int(x_min + rx2 * face_width))
         y2 = min(height, int(y_min + ry2 * face_height))
-        if x2 <= x1 or y2 <= y1:
+    elif region in ("Left Cheek", "Right Cheek"):
+        # FaceLandmarker indices: 1 = nose tip, 145/374 = lower eye
+        # landmarks, 13 = upper lip. These landmarks adapt the ROIs to pose.
+        required = (1, 13, 145, 374)
+        if len(landmarks) <= max(required) or face_width <= 0 or face_height <= 0:
             return None, None, None
-        roi_image = rgb_frame[y1:y2, x1:x2]
-        region_mask = np.full(roi_image.shape[:2], 255, dtype=np.uint8)
-        outline = np.array(
-            [[x1, y1], [x2 - 1, y1], [x2 - 1, y2 - 1], [x1, y2 - 1]],
-            dtype=np.int32
-        )
+
+        nose_x = float(landmarks[1].x) * width
+        lower_eye_y = (
+            float(landmarks[145].y) + float(landmarks[374].y)
+        ) * 0.5 * height
+        upper_lip_y = float(landmarks[13].y) * height
+
+        y1 = max(0, int(lower_eye_y + CHEEK_TOP_MARGIN * face_height))
+        y2 = min(height, int(upper_lip_y - CHEEK_BOTTOM_MARGIN * face_height))
+
+        if region == "Left Cheek":
+            x1 = max(0, int(x_min + CHEEK_OUTER_MARGIN * face_width))
+            x2 = min(width, int(nose_x - CHEEK_INNER_MARGIN * face_width))
+        else:
+            x1 = max(0, int(nose_x + CHEEK_INNER_MARGIN * face_width))
+            x2 = min(width, int(x_max - CHEEK_OUTER_MARGIN * face_width))
     else:
-        indices = CHEEK_LANDMARKS.get(region)
-        if not indices or max(indices) >= len(landmarks):
-            return None, None, None
-        polygon = np.array(
-            [[
-                int(np.clip(landmarks[i].x * width, 0, width - 1)),
-                int(np.clip(landmarks[i].y * height, 0, height - 1))
-            ] for i in indices],
-            dtype=np.int32
-        )
-        x1 = max(0, int(np.min(polygon[:, 0])))
-        y1 = max(0, int(np.min(polygon[:, 1])))
-        x2 = min(width, int(np.max(polygon[:, 0])) + 1)
-        y2 = min(height, int(np.max(polygon[:, 1])) + 1)
-        if x2 <= x1 or y2 <= y1:
-            return None, None, None
-        roi_image = rgb_frame[y1:y2, x1:x2]
-        region_mask = np.zeros(roi_image.shape[:2], dtype=np.uint8)
-        local_polygon = polygon - np.array([x1, y1], dtype=np.int32)
-        cv2.fillPoly(region_mask, [local_polygon], 255)
-        outline = polygon
+        return None, None, None
 
+    if x2 <= x1 or y2 <= y1:
+        return None, None, None
+
+    roi_image = rgb_frame[y1:y2, x1:x2]
     if roi_image.size == 0:
-        return None, (x1, y1, x2, y2), outline
+        return None, (x1, y1, x2, y2), None
 
+    region_mask = np.full(roi_image.shape[:2], 255, dtype=np.uint8)
     skin_mask = create_skin_mask(roi_image)
     combined_mask = cv2.bitwise_and(skin_mask, region_mask)
     selected = combined_mask > 0
     skin_pixels = roi_image[selected]
-    roi_area = int(np.count_nonzero(region_mask))
 
-    # Reject a region when too little of its intended skin area is usable.
-    if roi_area == 0 or len(skin_pixels) < max(30, int(0.10 * roi_area)):
-        return None, (x1, y1, x2, y2), outline
+    if len(skin_pixels) < 20:
+        return None, (x1, y1, x2, y2), None
 
-    return np.mean(skin_pixels, axis=0).astype(float), (x1, y1, x2, y2), outline
-
-
-# ============================================================
-# POS STREAM PROCESSING
-# ============================================================
+    mean_rgb = np.mean(skin_pixels, axis=0)
+    outline = np.array(
+        [[x1, y1], [x2 - 1, y1], [x2 - 1, y2 - 1], [x1, y2 - 1]],
+        dtype=np.int32
+    )
+    return mean_rgb, (x1, y1, x2, y2), outline
 
 def process_pos(region, rgb_values):
     state = region_states[region]
@@ -600,8 +590,6 @@ def process_frame(frame, elapsed_seconds, actual_fps):
             max(0, min(xs)), max(0, min(ys)),
             min(width - 1, max(xs)), min(height - 1, max(ys))
         )
-
-        cv2.rectangle(frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), (0, 255, 0), 2)
 
         for region in REGIONS:
             mean_rgb, coordinates, outline = extract_roi_rgb(
