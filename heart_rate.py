@@ -209,6 +209,8 @@ hr_history = {
 previous_hr = {
     region: None for region in regions
 }
+pending_hr = {region: None for region in regions}
+pending_count = {region: 0 for region in regions}
 
 results = []
 latest_spectra = {}
@@ -240,41 +242,36 @@ for end_index in range(
             power
         ) = estimate_hr(signal, fs)
 
-        # Median of the latest five readings
-        hr_history[region_name].append(raw_hr)
-
-        if len(hr_history[region_name]) > MEDIAN_HISTORY:
-            hr_history[region_name].pop(0)
-
-        smoothed_hr = float(
-            np.median(hr_history[region_name])
-        )
-
-        # Detect sudden HR changes
-        jump_warning = False
-
-        if previous_hr[region_name] is not None:
-
-            hr_change = abs(
-                smoothed_hr - previous_hr[region_name]
-            )
-
-            if hr_change > MAX_HR_JUMP:
-                jump_warning = True
-
-        previous_hr[region_name] = smoothed_hr
-
-        # Determine status
+        # Reject low-confidence values before they enter the median history.
+        smoothed_hr = np.nan
         if confidence < CONFIDENCE_THRESHOLD:
             status = "low_confidence"
-
-        elif jump_warning:
-            status = "jump_warning"
-
         else:
-            status = "ok"
-
-        if status == "ok":
+            accepted_hr = previous_hr[region_name]
+            jump = accepted_hr is not None and abs(raw_hr - accepted_hr) > MAX_HR_JUMP
+            if jump:
+                if pending_hr[region_name] is not None and abs(raw_hr - pending_hr[region_name]) <= 8.0:
+                    pending_count[region_name] += 1
+                else:
+                    pending_hr[region_name], pending_count[region_name] = raw_hr, 1
+                if pending_count[region_name] < 2:
+                    status = "change_pending"
+                else:
+                    hr_history[region_name].clear()
+                    hr_history[region_name].append(raw_hr)
+                    pending_hr[region_name], pending_count[region_name] = None, 0
+                    smoothed_hr = float(raw_hr)
+                    previous_hr[region_name] = smoothed_hr
+                    status = "ok"
+            else:
+                pending_hr[region_name], pending_count[region_name] = None, 0
+                hr_history[region_name].append(raw_hr)
+                smoothed_hr = float(np.median(hr_history[region_name]))
+                previous_hr[region_name] = smoothed_hr
+                status = "ok"
+            if len(hr_history[region_name]) > MEDIAN_HISTORY:
+                hr_history[region_name].pop(0)
+        if status == "ok" and np.isfinite(smoothed_hr):
             valid_region_hrs.append(smoothed_hr)
 
         row[f"{region_name}_Raw_HR"] = raw_hr
@@ -289,13 +286,9 @@ for end_index in range(
             "Dominant": dominant_frequency
         }
 
-    # Combined HR from reliable regions only
-    if len(valid_region_hrs) > 0:
-
-        combined_hr = float(
-            np.median(valid_region_hrs)
-        )
-
+    # Require two agreeing facial regions before publishing a combined value.
+    if len(valid_region_hrs) >= 2 and max(valid_region_hrs) - min(valid_region_hrs) <= 12.0:
+        combined_hr = float(np.median(valid_region_hrs))
         combined_status = "ok"
 
     else:
