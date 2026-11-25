@@ -821,6 +821,7 @@ def process_frame(frame, elapsed_seconds, actual_fps):
         final_hr_label.config(text=f"{final_hr:.1f} BPM")
         final_confidence_label.config(text=f"Estimated confidence: {final_conf:.3f}")
         status_color = "#00D084" if is_stable else "#FFC857"
+        stop_button.config(bg="#00A86B" if is_stable else "#C0392B")
         stop_message = (
             " — stable for 5 seconds; you can press STOP"
             if is_stable else " — keep still until the value is stable for 5 seconds"
@@ -831,6 +832,7 @@ def process_frame(frame, elapsed_seconds, actual_fps):
         # Keep measuring until the user presses STOP or closes the window.
     else:
         # A gap breaks the stability streak; require five fresh seconds after recovery.
+        stop_button.config(bg="#C0392B")
         combined_history.clear()
         last_combined_history_second = int(elapsed_seconds)
         # Hold the last accepted combined result briefly instead of flickering to blank.
@@ -1111,16 +1113,18 @@ controls = tk.Frame(root, bg="#101820")
 controls.pack(pady=8)
 
 def make_button(text, command, color):
-    tk.Button(
+    button = tk.Button(
         controls, text=text, command=command,
         font=("Arial", 11, "bold"), bg=color, fg="white",
         width=15, relief="flat", padx=4, pady=7
-    ).pack(side="left", padx=6)
+    )
+    button.pack(side="left", padx=6)
+    return button
 
 
 make_button("START WEBCAM", start_camera, "#00A86B")
 make_button("UPLOAD VIDEO", upload_video, "#2874A6")
-make_button("STOP", stop_source, "#C0392B")
+stop_button = make_button("STOP", stop_source, "#C0392B")
 make_button("SAVE CSV", save_results, "#6C5CE7")
 
 
