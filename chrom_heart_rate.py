@@ -193,6 +193,29 @@ def estimate_hr(signal, fs):
         np.clip(confidence, 0.0, 1.0)
     )
 
+    # Verify the FFT estimate with an independent autocorrelation period.
+    # If they disagree, keep the estimate but mark it low-confidence so it
+    # cannot enter the rolling median or combined result.
+    centered = signal - np.mean(signal)
+    autocorr = np.correlate(centered, centered, mode="full")[len(centered) - 1:]
+    if autocorr[0] <= 1e-12:
+        confidence = 0.0
+    else:
+        autocorr = autocorr / autocorr[0]
+        min_lag = max(1, int(np.floor(fs / MAX_FREQ)))
+        max_lag = min(len(centered) - 1, int(np.ceil(fs / MIN_FREQ)))
+        if max_lag <= min_lag:
+            confidence = 0.0
+        else:
+            lag_range = autocorr[min_lag:max_lag + 1]
+            best_lag = min_lag + int(np.argmax(lag_range))
+            autocorr_hr = 60.0 * fs / best_lag
+            autocorr_quality = float(autocorr[best_lag])
+            if autocorr_quality < 0.15 or abs(raw_hr - autocorr_hr) > 12.0:
+                confidence = 0.0
+            else:
+                confidence = min(confidence, autocorr_quality)
+
     return (
         raw_hr,
         dominant_frequency,
