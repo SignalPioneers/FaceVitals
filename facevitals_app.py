@@ -120,6 +120,7 @@ def create_region_state():
         "rgb_time_buffer": deque(maxlen=2),
         "next_sample_time": None,
         "last_rgb": None,
+        "last_rgb_time": None,
         "chrom_sos": butter(
             FILTER_ORDER, [LOW_HR, HIGH_HR],
             btype="bandpass", fs=session_fs, output="sos"
@@ -742,15 +743,21 @@ def process_frame(frame, elapsed_seconds, actual_fps):
             if mean_rgb is not None:
                 current_rgb[region] = mean_rgb
                 previous_rgb = region_states[region]["last_rgb"]
-                if previous_rgb is not None:
+                previous_rgb_time = region_states[region]["last_rgb_time"]
+                if (
+                    previous_rgb is not None
+                    and previous_rgb_time is not None
+                    and 0.0 < elapsed_seconds - previous_rgb_time <= MAX_SAMPLE_GAP_SECONDS
+                ):
                     relative_change = (
                         np.abs(mean_rgb - previous_rgb) /
                         np.maximum(np.abs(previous_rgb), 1.0)
                     )
                     current_rgb_changes[region] = float(np.mean(relative_change) * 100.0)
                 process_timestamped_rgb(region, mean_rgb, elapsed_seconds)
-                # Keep this after resampling because a long dropout can reset the region state.
+                # Keep these after resampling because a long dropout can reset the region state.
                 region_states[region]["last_rgb"] = np.asarray(mean_rgb, dtype=float)
+                region_states[region]["last_rgb_time"] = float(elapsed_seconds)
             # Keep the rolling signal state through brief ROI extraction dropouts.
             # Resetting here discarded the 10-second POS/CHROM windows and caused flicker.
 
