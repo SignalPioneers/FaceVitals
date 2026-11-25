@@ -137,6 +137,8 @@ def create_region_state():
         "chrom_sample_count": 0,
         "pos_last_update": 0,
         "chrom_last_update": 0,
+        "pos_peak_diagnostics": "", "chrom_peak_diagnostics": "",
+        "pos_autocorr_bpm": None, "chrom_autocorr_bpm": None,
     }
 
 
@@ -391,6 +393,31 @@ def estimate_hr_from_signal(signal_values, history, previous_hr, pending_hr, pen
     return smoothed, confidence, "OK", smoothed, None, 0
 
 
+def signal_diagnostics(signal_values):
+    """Return strongest FFT candidates and strongest autocorrelation-period candidate."""
+    x = np.asarray(signal_values, dtype=float)
+    if len(x) < hr_window or not np.all(np.isfinite(x)):
+        return "", None
+    x = x - np.mean(x)
+    if np.std(x) < 1e-8:
+        return "", None
+    spectrum = np.abs(np.fft.rfft(x * np.hanning(len(x)), n=FFT_SIZE)) ** 2
+    freqs = np.fft.rfftfreq(FFT_SIZE, d=1.0 / session_fs)
+    band = np.where((freqs >= LOW_HR) & (freqs <= HIGH_HR))[0]
+    ranked = band[np.argsort(spectrum[band])[-5:][::-1]]
+    peaks = ";".join(f"{freqs[i]*60.0:.1f}:{spectrum[i]:.3g}" for i in ranked)
+    ac = np.correlate(x, x, mode="full")[len(x)-1:]
+    if ac[0] <= 1e-12:
+        return peaks, None
+    ac = ac / ac[0]
+    lo = max(1, int(np.floor(session_fs / HIGH_HR)))
+    hi = min(len(x)-1, int(np.ceil(session_fs / LOW_HR)))
+    if hi <= lo:
+        return peaks, None
+    lag = lo + int(np.argmax(ac[lo:hi+1]))
+    return peaks, float(60.0 * session_fs / lag)
+
+
 def update_region_estimates(region):
     state = region_states[region]
 
@@ -406,6 +433,7 @@ def update_region_estimates(region):
         state["pos_confidence"], state["pos_status"] = conf, status
         state["pos_previous_hr"] = previous
         state["pos_pending_hr"], state["pos_pending_count"] = pending, pending_count
+        state["pos_peak_diagnostics"], state["pos_autocorr_bpm"] = signal_diagnostics(state["pos_filtered"])
         state["pos_last_update"] = state["pos_sample_count"]
 
     if (
@@ -420,6 +448,7 @@ def update_region_estimates(region):
         state["chrom_confidence"], state["chrom_status"] = conf, status
         state["chrom_previous_hr"] = previous
         state["chrom_pending_hr"], state["chrom_pending_count"] = pending, pending_count
+        state["chrom_peak_diagnostics"], state["chrom_autocorr_bpm"] = signal_diagnostics(state["chrom_filtered"])
         state["chrom_last_update"] = state["chrom_sample_count"]
 
 
@@ -678,6 +707,13 @@ def process_frame(frame, elapsed_seconds, actual_fps):
         "Final_Confidence": final_conf,
         "Final_Status": final_status,
     }
+
+    for region in REGIONS:
+        state = region_states[region]
+        row[f"{region}_POS_Top5Peaks_BPM_Power"] = state["pos_peak_diagnostics"]
+        row[f"{region}_POS_Autocorr_BPM"] = state["pos_autocorr_bpm"]
+        row[f"{region}_CHROM_Top5Peaks_BPM_Power"] = state["chrom_peak_diagnostics"]
+        row[f"{region}_CHROM_Autocorr_BPM"] = state["chrom_autocorr_bpm"]
 
     for region in REGIONS:
         state = region_states[region]
