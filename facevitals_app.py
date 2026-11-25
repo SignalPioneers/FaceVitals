@@ -119,6 +119,10 @@ def create_region_state():
         "chrom_status": "Warming up",
         "pos_previous_hr": None,
         "chrom_previous_hr": None,
+        "pos_pending_hr": None,
+        "chrom_pending_hr": None,
+        "pos_pending_count": 0,
+        "chrom_pending_count": 0,
         "pos_sample_count": 0,
         "chrom_sample_count": 0,
         "pos_last_update": 0,
@@ -284,51 +288,48 @@ def process_chrom(region, rgb_values):
 # HEART RATE / CONFIDENCE
 # ============================================================
 
-def estimate_hr_from_signal(signal_values, history, previous_hr):
+def estimate_hr_from_signal(signal_values, history, previous_hr, pending_hr, pending_count):
+    """Gate low-quality values and confirm sudden changes before publishing."""
     if len(signal_values) < hr_window:
-        return None, 0.0, "Warming up", previous_hr
-
+        return None, 0.0, "Warming up", previous_hr, pending_hr, pending_count
     signal = np.asarray(signal_values, dtype=float)
-    signal -= np.mean(signal)
-    if np.std(signal) < 1e-8:
-        return None, 0.0, "Low signal", previous_hr
-
+    signal = signal - np.mean(signal)
+    if not np.all(np.isfinite(signal)) or np.std(signal) < 1e-8:
+        return None, 0.0, "Low signal", previous_hr, pending_hr, pending_count
     windowed = signal * np.hanning(hr_window)
     spectrum = np.fft.rfft(windowed, n=FFT_SIZE)
     power = np.abs(spectrum) ** 2
     frequencies = np.fft.rfftfreq(FFT_SIZE, d=1.0 / session_fs)
-
     valid = (frequencies >= LOW_HR) & (frequencies <= HIGH_HR)
     if not np.any(valid):
-        return None, 0.0, "No valid HR band", previous_hr
-
+        return None, 0.0, "No valid HR band", previous_hr, pending_hr, pending_count
     valid_indices = np.where(valid)[0]
     peak_index = valid_indices[np.argmax(power[valid])]
     peak_frequency = frequencies[peak_index]
     raw_hr = float(peak_frequency * 60.0)
-
     total_power = float(np.sum(power[valid]))
     if total_power <= 1e-12:
-        return None, 0.0, "Low signal", previous_hr
-
+        return None, 0.0, "Low signal", previous_hr, pending_hr, pending_count
     fundamental = (np.abs(frequencies - peak_frequency) <= 0.1) & valid
-    harmonic = (
-        (np.abs(frequencies - 2.0 * peak_frequency) <= 0.1) & valid
-    )
+    harmonic = (np.abs(frequencies - 2.0 * peak_frequency) <= 0.1) & valid
     confidence = float(np.clip(
-        (np.sum(power[fundamental]) + np.sum(power[harmonic])) / total_power,
-        0.0, 1.0
+        (np.sum(power[fundamental]) + np.sum(power[harmonic])) / total_power, 0.0, 1.0
     ))
-
     if confidence < CONFIDENCE_THRESHOLD:
-        return raw_hr, confidence, "Low confidence", previous_hr
-
+        return None, confidence, "Low confidence", previous_hr, pending_hr, pending_count
     if previous_hr is not None and abs(raw_hr - previous_hr) > MAX_HR_JUMP:
-        return raw_hr, confidence, "Jump warning", previous_hr
-
+        if pending_hr is not None and abs(raw_hr - pending_hr) <= 8.0:
+            pending_count += 1
+        else:
+            pending_hr, pending_count = raw_hr, 1
+        if pending_count < 2:
+            return None, confidence, "Change pending", previous_hr, pending_hr, pending_count
+        history.clear()
+    else:
+        pending_hr, pending_count = None, 0
     history.append(raw_hr)
     smoothed = float(np.median(history))
-    return smoothed, confidence, "OK", smoothed
+    return smoothed, confidence, "OK", smoothed, None, 0
 
 
 def update_region_estimates(region):
@@ -338,28 +339,28 @@ def update_region_estimates(region):
         len(state["pos_filtered"]) >= hr_window
         and state["pos_sample_count"] - state["pos_last_update"] >= update_interval
     ):
-        hr, conf, status, previous = estimate_hr_from_signal(
-            state["pos_filtered"], state["pos_history"], state["pos_previous_hr"]
+        hr, conf, status, previous, pending, pending_count = estimate_hr_from_signal(
+            state["pos_filtered"], state["pos_history"], state["pos_previous_hr"],
+            state["pos_pending_hr"], state["pos_pending_count"]
         )
-        state["pos_hr"] = hr
-        state["pos_raw_hr"] = hr
-        state["pos_confidence"] = conf
-        state["pos_status"] = status
+        state["pos_hr"], state["pos_raw_hr"] = hr, hr
+        state["pos_confidence"], state["pos_status"] = conf, status
         state["pos_previous_hr"] = previous
+        state["pos_pending_hr"], state["pos_pending_count"] = pending, pending_count
         state["pos_last_update"] = state["pos_sample_count"]
 
     if (
         len(state["chrom_filtered"]) >= hr_window
         and state["chrom_sample_count"] - state["chrom_last_update"] >= update_interval
     ):
-        hr, conf, status, previous = estimate_hr_from_signal(
-            state["chrom_filtered"], state["chrom_history"], state["chrom_previous_hr"]
+        hr, conf, status, previous, pending, pending_count = estimate_hr_from_signal(
+            state["chrom_filtered"], state["chrom_history"], state["chrom_previous_hr"],
+            state["chrom_pending_hr"], state["chrom_pending_count"]
         )
-        state["chrom_hr"] = hr
-        state["chrom_raw_hr"] = hr
-        state["chrom_confidence"] = conf
-        state["chrom_status"] = status
+        state["chrom_hr"], state["chrom_raw_hr"] = hr, hr
+        state["chrom_confidence"], state["chrom_status"] = conf, status
         state["chrom_previous_hr"] = previous
+        state["chrom_pending_hr"], state["chrom_pending_count"] = pending, pending_count
         state["chrom_last_update"] = state["chrom_sample_count"]
 
 
@@ -374,7 +375,7 @@ def get_algorithm_combined(key):
         if hr is not None and conf >= CONFIDENCE_THRESHOLD and status == "OK":
             values.append(hr)
             confidences.append(conf)
-    if not values:
+    if len(values) < 2 or (max(values) - min(values)) > 12.0:
         return None, None
     return float(np.median(values)), float(np.median(confidences))
 
