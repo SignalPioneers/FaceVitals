@@ -81,6 +81,8 @@ camera_times = deque(maxlen=60)
 after_id = None
 last_reliable_result = None
 latest_elapsed_seconds = 0.0
+combined_history = deque(maxlen=5)
+last_combined_history_second = -1
 
 pos_window = int(round(FS_DEFAULT * POS_WINDOW_SECONDS))
 hr_window = int(round(FS_DEFAULT * HR_WINDOW_SECONDS))
@@ -692,7 +694,7 @@ def save_results():
 # ============================================================
 
 def process_frame(frame, elapsed_seconds, actual_fps):
-    global last_reliable_result, latest_elapsed_seconds
+    global last_reliable_result, latest_elapsed_seconds, last_combined_history_second
     latest_elapsed_seconds = float(elapsed_seconds)
     rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
@@ -808,10 +810,22 @@ def process_frame(frame, elapsed_seconds, actual_fps):
         )
 
     if final_hr is not None:
+        current_second = int(elapsed_seconds)
+        if current_second > last_combined_history_second:
+            combined_history.append(float(final_hr))
+            last_combined_history_second = current_second
+        is_stable = (
+            len(combined_history) == combined_history.maxlen
+            and (max(combined_history) - min(combined_history)) <= 5.0
+        )
         final_hr_label.config(text=f"{final_hr:.1f} BPM")
         final_confidence_label.config(text=f"Estimated confidence: {final_conf:.3f}")
-        status_color = "#00D084" if "agree" in final_status else "#FFC857"
-        final_status_label.config(text=f"Status: {final_status}", fg=status_color)
+        status_color = "#00D084" if is_stable else "#FFC857"
+        stop_message = (
+            " — stable for 5 seconds; you can press STOP"
+            if is_stable else " — keep still until the value is stable for 5 seconds"
+        )
+        final_status_label.config(text=f"Status: {final_status}{stop_message}", fg=status_color)
         # Keep the most recent displayed estimate available after the source stops.
         last_reliable_result = (final_hr, final_conf, time.monotonic(), float(elapsed_seconds))
         # Keep measuring until the user presses STOP or closes the window.
@@ -940,7 +954,7 @@ def source_update():
 
 def start_camera():
     global capture, source_mode, source_running, session_start
-    global last_reliable_result
+    global last_reliable_result, last_combined_history_second
 
     if source_running:
         stop_source(manual=False)
@@ -959,6 +973,8 @@ def start_camera():
     configure_sampling(FS_DEFAULT)
     reset_all_regions()
     last_reliable_result = None
+    combined_history.clear()
+    last_combined_history_second = -1
     record_rows.clear()
     camera_times.clear()
     capture = cap
@@ -973,7 +989,7 @@ def start_camera():
 def upload_video():
     global capture, source_mode, source_running, source_fps
     global video_frame_index, video_path
-    global last_reliable_result
+    global last_reliable_result, last_combined_history_second
 
     path = filedialog.askopenfilename(
         title="Select a video for FaceVitals analysis",
@@ -1006,6 +1022,8 @@ def upload_video():
     configure_sampling(fps)
     reset_all_regions()
     last_reliable_result = None
+    combined_history.clear()
+    last_combined_history_second = -1
     record_rows.clear()
     camera_times.clear()
     capture = cap
