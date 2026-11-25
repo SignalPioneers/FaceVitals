@@ -74,10 +74,24 @@ The application is currently an engineering prototype. The result from this sing
 
 ## 7. Code corrections – 25 November 2026
 
-- Replaced the broad left/right cheek rectangles in the live application with MediaPipe FaceLandmarker cheek polygons. The cheek RGB average is now calculated only from skin-mask pixels inside the corresponding polygon, reducing accidental sampling across the nose.
+- Updated the live application's cheek sampling to use landmark-guided rectangular regions that exclude the central nose area. The forehead remains a separate face-box ROI. The regions are not polygon masks; the ROI geometry and skin-mask quality still require validation with saved webcam footage.
 - Kept the forehead region as a separate conservative face-box ROI.
 - Added an autocorrelation periodicity check to the live app, POS offline heart-rate estimator, and CHROM offline heart-rate estimator.
 - When the dominant FFT estimate and the autocorrelation period disagree by more than 12 BPM, the estimate is rejected / marked low-confidence instead of being accepted into the rolling median. The live application displays an ambiguous-signal status rather than publishing that BPM.
 - A basic synthetic-signal check at 60–180 BPM showed close FFT/autocorrelation agreement for clean single-frequency signals. This is only a software sanity check; it does not demonstrate real-camera accuracy.
 
 **Important:** These changes reduce two known sources of error but do not prove that the 60.4 BPM versus 104 PR mismatch is solved. Motion artefacts, lighting variation, ROI placement, and peak-selection ambiguity can still produce an incorrect estimate. The next required test is a synchronized recording with a pulse oximeter, checking the same time interval.
+
+
+## 8. Live webcam and signal-pipeline corrections – 25 November 2026
+
+The integrated application was updated after a synchronized pulse-oximeter comparison showed a substantial difference (73 PR versus 55.9 BPM).
+
+- Added timestamp-based RGB resampling onto the configured uniform analysis clock. Webcam frames are no longer assumed to arrive at exactly 30 FPS; short frame intervals are interpolated, while long gaps reset the affected region's signal state rather than stitching across a dropout.
+- Changed live CHROM processing to overlap-add every 1.6-second window, matching the project's offline CHROM implementation instead of emitting only the center sample from each window.
+- Added a minimum skin-pixel ratio of 10% for each ROI. The webcam preview now shows each ROI in green when the skin-pixel requirement is met and red when it is not, together with the measured skin percentage.
+- Added the analysis sampling frequency and per-region skin ratios to the exported CSV for later inspection of sampling and color/ROI quality.
+- Tightened result gates: POS and CHROM each require at least two valid facial regions that agree within the configured spread. A final combined BPM is shown only when both algorithm-level estimates are available and differ by no more than the configured agreement threshold. Single-region or disagreeing outputs are not presented as a valid combined BPM.
+- Requested 1280×720 at 30 FPS from the webcam when supported; timestamp resampling remains responsible for the actual analysis timing.
+
+**Verification status:** The changes are committed to the feature branch, but the updated application has not yet been executed on the user's computer or revalidated against the pulse oximeter. Python compilation, a new synchronized recording, and inspection of the exported CSV are still required. No accuracy claim is made from these code changes alone.
