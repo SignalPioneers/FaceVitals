@@ -549,7 +549,7 @@ def get_algorithm_combined(key):
         else:
             is_fresh = (
                 last_good_time is not None
-                and (now - last_good_time) <= 5.0
+                and (now - last_good_time) <= 2.5
             )
 
         if (hr is not None and is_fresh
@@ -842,8 +842,8 @@ def process_frame(frame, elapsed_seconds, actual_fps):
 
     for region in REGIONS:
         state = region_states[region]
-        p = state["pos_hr"]
-        c = state["chrom_hr"]
+        p = state["pos_hr"] if face_detected else None
+        c = state["chrom_hr"] if face_detected else None
         p_text = f"{p:.1f}" if p is not None else "--"
         c_text = f"{c:.1f}" if c is not None else "--"
         region_labels[region].config(text=f"POS: {p_text} BPM | CHROM: {c_text} BPM")
@@ -854,7 +854,10 @@ def process_frame(frame, elapsed_seconds, actual_fps):
             )
         )
         region_labels[region + "_status"].config(
-            text=f"POS: {state['pos_status']} | CHROM: {state['chrom_status']}"
+            text=(
+                "No face detected" if not face_detected
+                else f"POS: {state['pos_status']} | CHROM: {state['chrom_status']}"
+            )
         )
 
     row = {
