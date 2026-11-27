@@ -169,15 +169,27 @@ reset_all_regions()
 # ============================================================
 
 def create_skin_mask(rgb_image):
+    """
+    Build a deliberately broad skin candidate mask for face-only ROIs.
+
+    HSV hue helps reject unrelated colours, while YCrCb is less dependent
+    on brightness. The broad ranges are intended to tolerate varied
+    illumination and skin tones; the face-landmark ROI remains the main
+    spatial constraint, not this colour mask alone.
+    """
     hsv = cv2.cvtColor(rgb_image, cv2.COLOR_RGB2HSV)
-    lower1 = np.array([0, 20, 40])
-    upper1 = np.array([25, 200, 255])
-    lower2 = np.array([160, 20, 40])
-    upper2 = np.array([180, 200, 255])
-    return cv2.bitwise_or(
-        cv2.inRange(hsv, lower1, upper1),
-        cv2.inRange(hsv, lower2, upper2),
+    ycrcb = cv2.cvtColor(rgb_image, cv2.COLOR_RGB2YCrCb)
+
+    hsv_mask = cv2.inRange(
+        hsv, np.array([0, 10, 12]), np.array([28, 220, 255])
     )
+    hsv_mask |= cv2.inRange(
+        hsv, np.array([155, 10, 12]), np.array([180, 220, 255])
+    )
+    ycrcb_mask = cv2.inRange(
+        ycrcb, np.array([8, 118, 58]), np.array([255, 190, 150])
+    )
+    return cv2.bitwise_or(hsv_mask, ycrcb_mask)
 
 
 def extract_roi_rgb(rgb_frame, landmarks, bbox, region):
@@ -229,8 +241,20 @@ def extract_roi_rgb(rgb_frame, landmarks, bbox, region):
     selected = skin_mask > 0
     skin_pixels = roi_image[selected]
     total_pixels = int(roi_image.shape[0] * roi_image.shape[1])
-    skin_ratio = (len(skin_pixels) / total_pixels) if total_pixels else 0.0
     minimum_pixels = max(20, int(total_pixels * MIN_SKIN_RATIO))
+
+    # If strict colour selection is too sparse (common in dim or strongly
+    # tinted footage), retry with a wider chroma range. Do not fall back to
+    # every pixel: that would let background pixels corrupt the pulse signal.
+    if len(skin_pixels) < minimum_pixels:
+        ycrcb = cv2.cvtColor(roi_image, cv2.COLOR_RGB2YCrCb)
+        relaxed_mask = cv2.inRange(
+            ycrcb, np.array([5, 108, 52]), np.array([255, 198, 158])
+        )
+        selected = relaxed_mask > 0
+        skin_pixels = roi_image[selected]
+
+    skin_ratio = (len(skin_pixels) / total_pixels) if total_pixels else 0.0
 
     outline = np.array(
         [[x1, y1], [x2 - 1, y1], [x2 - 1, y2 - 1], [x1, y2 - 1]],
@@ -1016,15 +1040,19 @@ def upload_video():
         return
 
     fps = cap.get(cv2.CAP_PROP_FPS)
-    if not np.isfinite(fps) or fps < 20 or fps > 60:
+    # The pulse band extends to 3.5 Hz, so the source must provide more
+    # than 7 samples/second. Keep a margin and accept common phone footage
+    # from 10 to 120 FPS. High-rate videos are resampled onto a 30 Hz grid.
+    if not np.isfinite(fps) or fps < 10 or fps > 120:
         cap.release()
         messagebox.showerror(
             "Unsupported Video FPS",
-            f"Detected video FPS: {fps:.2f}\nPlease use a video between 20 and 60 FPS."
+            f"Detected video FPS: {fps:.2f}\\nPlease use a video between 10 and 120 FPS."
         )
         return
 
-    configure_sampling(fps)
+    analysis_fps = min(float(fps), FS_DEFAULT)
+    configure_sampling(analysis_fps)
     reset_all_regions()
     last_reliable_result = None
     combined_history.clear()
