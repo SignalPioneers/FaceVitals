@@ -473,13 +473,20 @@ def estimate_hr_from_signal(signal_values, history, previous_hr, pending_hr, pen
         (np.sum(power[fundamental]) + np.sum(power[harmonic])) / total_power, 0.0, 1.0
     ))
     if confidence < CONFIDENCE_THRESHOLD:
-        return None, confidence, "Low confidence", previous_hr, pending_hr, pending_count
+        # Keep the spectral candidate visible, but explicitly mark it as
+        # preliminary. A low confidence score must not silently erase BPM.
+        return (
+            raw_hr, confidence, "PRELIMINARY — low spectral confidence",
+            previous_hr, pending_hr, pending_count
+        )
 
-    # A strong spectral peak is not sufficient on its own. Require the
-    # independent time-domain periodicity estimate to support it. This is
-    # deliberately conservative: disagreement means no BPM is published.
+    # Autocorrelation remains an independent diagnostic. Disagreement lowers
+    # trust in the candidate, but does not hide an otherwise measurable BPM.
     if abs(raw_hr - autocorr_hr) > MAX_AUTOCORR_DIFFERENCE:
-        return None, confidence, "Low periodicity agreement", previous_hr, pending_hr, pending_count
+        return (
+            raw_hr, confidence, "PRELIMINARY — low periodicity agreement",
+            previous_hr, pending_hr, pending_count
+        )
 
     if previous_hr is not None and abs(raw_hr - previous_hr) > MAX_HR_JUMP:
         if pending_hr is not None and abs(raw_hr - pending_hr) <= 8.0:
@@ -487,7 +494,10 @@ def estimate_hr_from_signal(signal_values, history, previous_hr, pending_hr, pen
         else:
             pending_hr, pending_count = raw_hr, 1
         if pending_count < 2:
-            return None, confidence, "Change pending", previous_hr, pending_hr, pending_count
+            return (
+                raw_hr, confidence, "PRELIMINARY — change pending confirmation",
+                previous_hr, pending_hr, pending_count
+            )
         history.clear()
     else:
         pending_hr, pending_count = None, 0
@@ -564,8 +574,12 @@ def update_region_estimates(region):
 
 
 def get_algorithm_combined(key):
-    values = []
-    confidences = []
+    """
+    Prefer quality-checked multi-region results. If those checks fail, still
+    publish a clearly labelled preliminary estimate from available regions.
+    """
+    candidates = []
+    accepted = []
     now = time.monotonic()
 
     for region in REGIONS:
@@ -575,40 +589,59 @@ def get_algorithm_combined(key):
         status = state[f"{key}_status"]
         last_good_time = state[f"{key}_last_good_time"]
 
-        # Apply the same freshness rule to webcam and uploaded video.
-        # Video EOF must not make an old accepted estimate valid forever.
         is_fresh = (
             last_good_time is not None
             and (now - last_good_time) <= 5.0
         )
+        if hr is not None and is_fresh:
+            candidate = (float(hr), float(conf), status)
+            candidates.append(candidate)
+            if conf >= CONFIDENCE_THRESHOLD and status == "OK":
+                accepted.append(candidate)
 
-        if (hr is not None and is_fresh
-                and conf >= CONFIDENCE_THRESHOLD and status == "OK"):
-            values.append(float(hr))
-            confidences.append(float(conf))
+    # First choice: at least two fresh, quality-checked regions agree.
+    if len(accepted) >= MIN_VALID_REGIONS:
+        values = [item[0] for item in accepted]
+        center = float(np.median(values))
+        inliers = [
+            item for item in accepted
+            if abs(item[0] - center) <= MAX_REGION_SPREAD
+        ]
+        if (
+            len(inliers) >= MIN_VALID_REGIONS
+            and max(item[0] for item in inliers) - min(item[0] for item in inliers)
+            <= MAX_REGION_SPREAD
+        ):
+            return (
+                float(np.median([item[0] for item in inliers])),
+                float(np.median([item[1] for item in inliers])),
+                "OK",
+            )
 
-    if len(values) < MIN_VALID_REGIONS:
-        return None, None
+    # Fallback: show the median of every fresh regional candidate, even if
+    # only one region is available or regions disagree. Reduce confidence
+    # and label it preliminary so it is never mistaken for a validated result.
+    if not candidates:
+        return None, None, "NO CURRENT ESTIMATE"
 
-    # Require at least two facial regions to agree before publishing an
-    # algorithm-level estimate.
-    center = float(np.median(values))
-    inlier_indices = [
-        index for index, value in enumerate(values)
-        if abs(value - center) <= MAX_REGION_SPREAD
-    ]
-    if len(inlier_indices) < MIN_VALID_REGIONS:
-        return None, None
-
-    accepted_values = [values[index] for index in inlier_indices]
-    accepted_confidences = [confidences[index] for index in inlier_indices]
-    if max(accepted_values) - min(accepted_values) > MAX_REGION_SPREAD:
-        return None, None
-    return (
-        float(np.median(accepted_values)),
-        float(np.median(accepted_confidences)),
+    values = [item[0] for item in candidates]
+    confidences = [item[1] for item in candidates]
+    preliminary_bpm = float(np.median(values))
+    spread = max(values) - min(values) if len(values) > 1 else 0.0
+    spread_factor = float(np.clip(1.0 - spread / 60.0, 0.20, 0.60))
+    preliminary_confidence = float(
+        np.median(confidences) * 0.5 * spread_factor
     )
 
+    if len(candidates) == 1:
+        reason = "one region available"
+    else:
+        reason = f"{len(candidates)} regions; spread {spread:.1f} BPM"
+    return (
+        preliminary_bpm,
+        preliminary_confidence,
+        f"PRELIMINARY — {reason}; treat as unverified",
+    )
 
 # ============================================================
 # TKINTER USER INTERFACE
@@ -803,8 +836,8 @@ def process_frame(frame, elapsed_seconds, actual_fps):
             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2
         )
 
-    pos_hr, pos_conf = get_algorithm_combined("pos")
-    chrom_hr, chrom_conf = get_algorithm_combined("chrom")
+    pos_hr, pos_conf, pos_quality_status = get_algorithm_combined("pos")
+    chrom_hr, chrom_conf, chrom_quality_status = get_algorithm_combined("chrom")
     if pos_hr is not None:
         pos_total_label.config(text=f"{pos_hr:.1f} BPM")
     else:
@@ -840,23 +873,32 @@ def process_frame(frame, elapsed_seconds, actual_fps):
             * agreement_factor
         )
         estimate_source = "POS+CHROM"
-        if algorithm_difference <= MAX_ALGORITHM_DIFFERENCE:
+        if (
+            algorithm_difference <= MAX_ALGORITHM_DIFFERENCE
+            and pos_quality_status == "OK"
+            and chrom_quality_status == "OK"
+        ):
             final_status = "Combined estimate — POS and CHROM agree"
         else:
             final_status = (
-                f"LOW AGREEMENT — combined estimate shown; "
-                f"POS/CHROM differ by {algorithm_difference:.1f} BPM"
+                f"PRELIMINARY — POS: {pos_quality_status}; "
+                f"CHROM: {chrom_quality_status}; "
+                f"algorithm difference {algorithm_difference:.1f} BPM"
             )
     elif pos_hr is not None:
         final_hr = float(pos_hr)
         final_conf = float(pos_conf) * 0.75
         estimate_source = "POS only"
-        final_status = "Single algorithm estimate — POS only; CHROM unavailable"
+        final_status = (
+            f"Single algorithm estimate — POS only; {pos_quality_status}"
+        )
     elif chrom_hr is not None:
         final_hr = float(chrom_hr)
         final_conf = float(chrom_conf) * 0.75
         estimate_source = "CHROM only"
-        final_status = "Single algorithm estimate — CHROM only; POS unavailable"
+        final_status = (
+            f"Single algorithm estimate — CHROM only; {chrom_quality_status}"
+        )
     elif not face_detected:
         final_status = "Face temporarily not detected — holding recent valid estimates"
     else:
@@ -928,8 +970,10 @@ def process_frame(frame, elapsed_seconds, actual_fps):
         "Face_Detected": bool(face_detected),
         "POS_Combined_BPM": pos_hr,
         "POS_Confidence": pos_conf,
+        "POS_Quality_Status": pos_quality_status,
         "CHROM_Combined_BPM": chrom_hr,
         "CHROM_Confidence": chrom_conf,
+        "CHROM_Quality_Status": chrom_quality_status,
         "Final_Combined_BPM": final_hr,
         "Final_Confidence": final_conf,
         "POS_CHROM_Difference_BPM": algorithm_difference,
@@ -1143,7 +1187,7 @@ def stop_source(manual=True):
         )
         messagebox.showinfo(
             "Measurement finalized",
-            f"Final accepted estimate: {bpm:.1f} BPM\n"
+            f"Final estimate: {bpm:.1f} BPM\n"
             f"Confidence: {confidence:.3f}\n"
             f"Measurement duration: {latest_elapsed_seconds:.1f} seconds\n"
             f"Stability: {stability_text}\n\n"
