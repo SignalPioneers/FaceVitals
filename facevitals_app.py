@@ -1047,7 +1047,7 @@ def upload_video():
         cap.release()
         messagebox.showerror(
             "Unsupported Video FPS",
-            f"Detected video FPS: {fps:.2f}\\nPlease use a video between 10 and 120 FPS."
+            f"Detected video FPS: {fps:.2f}\nPlease use a video between 10 and 120 FPS."
         )
         return
 
