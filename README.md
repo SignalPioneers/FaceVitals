@@ -1,196 +1,137 @@
 # FaceVitals
-### Contactless and Bias-Robust Vital Signs Estimation Using RGB Facial Videos
+### Contactless Heart-Rate Estimation from RGB Facial Videos
 
 **Project Team:** SignalPioneers  
 **Competition:** IEEE 2027 Signal Processing Cup
 
 ## 1. Project Overview
 
-FaceVitals is a research and engineering project that explores contactless estimation of human vital signs using ordinary RGB facial videos captured by a standard camera.
+FaceVitals is a research prototype for contactless heart-rate estimation from ordinary RGB facial videos. It analyses subtle changes in facial skin colour associated with pulse-related blood-volume changes.
 
-The project investigates how subtle color variations in facial skin, caused by blood volume changes, can be processed to estimate physiological information without requiring physical contact with the person.
+The current application focuses on heart-rate estimation using remote photoplethysmography (rPPG). It is a research demonstration, not a certified medical device.
 
-Our initial development focuses on heart rate estimation using remote photoplethysmography (rPPG).
+## 2. What the application does
 
-## 2. Project Objectives
+The desktop application supports:
+- Live webcam measurement.
+- Uploading and processing a recorded video.
+- Face detection and tracking.
+- RGB extraction from the forehead, left cheek and right cheek.
+- POS and CHROM rPPG processing.
+- Heart-rate estimates in beats per minute (BPM), with signal-quality/status information.
+- CSV export of recorded measurements.
 
-The main objectives are to:
+POS and CHROM are independent methods. Their estimates may differ; the application should show quality/status information rather than force the values to match.
 
-- Estimate heart rate from facial RGB video.
-- Extract facial regions of interest (ROIs).
-- Process RGB signals using signal processing techniques.
-- Implement and compare POS and CHROM algorithms.
-- Improve signal quality and estimation stability.
-- Explore robustness under different recording conditions.
+## 3. How it works
 
-## 3. System Architecture
+1. The user starts the webcam or selects a video file.
+2. MediaPipe detects the face and facial landmarks.
+3. FaceVitals extracts RGB colour information from selected facial regions.
+4. POS and CHROM process the RGB changes to obtain pulse-related signals.
+5. Signal filtering and frequency analysis estimate BPM.
+6. The interface displays regional and algorithm results, a combined estimate when available, and quality/status information.
 
-The current prototype follows this processing pipeline:
+## 4. Quick start on Windows (recommended)
 
-1. Video acquisition using a webcam.
-2. Face detection and tracking.
-3. Extraction of RGB signals from facial regions.
-4. Signal processing using POS and CHROM.
-5. Bandpass filtering.
-6. Heart rate estimation using FFT.
-7. Signal quality assessment and result display.
+The easiest way to launch FaceVitals from the source repository is the included **START_FACEVITALS.bat** file.
 
-## 4. Technologies Used
+### First-time setup
 
-- Python
-- OpenCV
-- MediaPipe
-- NumPy
-- SciPy
-- Pandas
-- Matplotlib
-- Tkinter
-- Visual Studio Code
+1. Install **Python 3** on Windows. During installation, enable **Add Python to PATH** if the installer offers that option.
+2. Download the project using GitHub's **Code → Download ZIP**, then extract the ZIP. Alternatively, clone the repository with Git.
+3. Make sure these files are together in the extracted project folder:
+   - `START_FACEVITALS.bat`
+   - `facevitals_app.py`
+   - `face_landmarker.task`
+   - `requirements.txt`
+4. Double-click **START_FACEVITALS.bat**.
+5. On the first run, the launcher creates a Python virtual environment and installs the required packages. This needs an internet connection and may take several minutes.
+6. When installation finishes, FaceVitals opens. Click **UPLOAD VIDEO** to choose a recorded video, or **START WEBCAM** to use the camera.
 
-## 5. Signal Processing Methods
+### Later launches
 
-### POS (Plane-Orthogonal-to-Skin)
+After the first successful setup, simply double-click **START_FACEVITALS.bat** again. The existing environment is reused; you do not need to open VS Code or type commands.
 
-POS is implemented to extract pulse-related information from normalized RGB signals while reducing the influence of certain illumination variations.
+### Important
 
-### CHROM (Chrominance-Based Method)
+- Keep `face_landmarker.task` in the same folder as `facevitals_app.py`. This model file is included in the repository.
+- Do not move the launcher, application script, model file or requirements file out of the project folder.
+- The first launch requires internet access to install Python packages.
+- Windows may show a security prompt for a downloaded ZIP or batch file. Only run files obtained from the official project repository.
 
-CHROM is implemented as a second rPPG method to extract pulse-related signals using chrominance information.
+## 5. Manual setup (alternative)
 
-Both methods are evaluated and compared using the same recorded RGB data.
-
-## 6. Current Development Status
-
-The current prototype includes:
-
-- Webcam-based video acquisition.
-- Facial detection using MediaPipe.
-- RGB signal extraction from multiple facial regions.
-- POS and CHROM signal processing.
-- Bandpass filtering.
-- FFT-based heart rate estimation.
-- Signal quality and stability analysis.
-- A live desktop application for heart rate monitoring.
-
-**Current scope:** Heart rate estimation is the implemented stage. SpO₂ and blood pressure estimation remain future development objectives and have not yet been validated.
-
-## 7. Installation and Usage
-
-### Requirements
-
-Before running FaceVitals, make sure you have:
-
-- Windows 10/11 or another supported operating system.
-- Python 3 installed (use a version compatible with the packages in `requirements.txt`).
-- Git installed.
-- A working webcam.
-- The MediaPipe Face Landmarker model file: `face_landmarker.task`.
-
-### Step 1: Clone the Repository
-
-Open a terminal and run:
-
-```bash
-git clone https://github.com/SignalPioneers/FaceVitals.git
-```
-
-Move into the project directory:
-
-```bash
-cd FaceVitals
-```
-
-### Step 2: Create a Virtual Environment
-
-```bash
-python -m venv .venv
-```
-
-Activate it on Windows PowerShell:
+If you prefer using PowerShell in the project folder:
 
 ```powershell
+py -3 -m venv .venv
 .venv\Scripts\Activate.ps1
-```
-
-### Step 3: Install Dependencies
-
-Upgrade pip:
-
-```bash
 python -m pip install --upgrade pip
-```
-
-Install the required packages:
-
-```bash
 python -m pip install -r requirements.txt
-```
-
-### Step 4: Check the MediaPipe Model
-
-Ensure that `face_landmarker.task` is available in the project root directory, where the application expects it.
-
-### Step 5: Run the Application
-
-```bash
 python facevitals_app.py
 ```
 
-Click the **START** button to activate the webcam and begin real-time heart rate estimation. Allow the system time to collect video frames before observing the estimated heart rate and signal quality indicators.
+If the `py` command is unavailable, use `python` instead, provided Python 3 is installed and available on PATH.
 
-Click **STOP** to stop the measurement.
+## 6. Using the application
 
-### Troubleshooting
+- **UPLOAD VIDEO:** choose a supported video file from your computer and let FaceVitals process it.
+- **START WEBCAM:** begin a live webcam session.
+- **STOP:** stop the current source/session.
+- **SAVE CSV:** save the measurement records generated during the session.
 
-- If a required Python module is missing, activate the virtual environment and reinstall dependencies.
-- If the webcam does not start, check camera permissions and ensure that no other application is using it.
-- If the MediaPipe model cannot be found, confirm that `face_landmarker.task` is in the expected project directory.
+For better signal quality, use steady lighting, keep the face visible and reasonably still, and allow sufficient time for the signal window to fill. A preliminary estimate is not a confirmed measurement. If the signal is insufficient, a reliable BPM may not be available.
 
+## 7. Technologies
 
-## 8. Project Structure
+- Python and Tkinter
+- OpenCV
+- MediaPipe
+- NumPy and SciPy
+- Pandas and Matplotlib
+- Pillow
 
-The repository contains Python scripts for:
+## 8. Troubleshooting
 
-- Webcam and face detection.
-- RGB signal extraction.
-- Signal resampling.
-- POS and CHROM algorithms.
-- Filtering and heart rate estimation.
-- Signal quality analysis.
-- Stability analysis and algorithm comparison.
-- Live application development.
+**The launcher says Python was not found**
+- Install Python 3 and enable **Add Python to PATH**.
+- Close and reopen the terminal or rerun the launcher after installation.
 
-## 9. Project Documentation
+**The first launch cannot install packages**
+- Check the internet connection.
+- Open PowerShell in the project folder and run:
+  `python -m pip install -r requirements.txt`.
 
-For contributors, researchers and anyone interested in understanding the implementation, the following documentation is available:
+**The application says `face_landmarker.task` is missing**
+- Confirm that the model file is beside `facevitals_app.py` in the project folder. Re-download the full repository if it is missing.
 
-- **[Development Workflow](docs/DEVELOPMENT_WORKFLOW.md)** – Explains the project pipeline, processing stages and how the different scripts work together.
-- **[Python Code Documentation](docs/CODE_DOCUMENTATION.md)** – Describes the purpose, inputs and outputs of the project's Python files.
+**The webcam does not start**
+- Allow camera access in Windows privacy settings.
+- Close other applications that may be using the webcam.
 
-## 10. Limitations
+**Upload Video is not visible**
+- Make sure you downloaded/extracted the current project version and launched it using `START_FACEVITALS.bat` from that same folder.
+- Do not launch an older copy of `facevitals_app.py` from another folder.
 
-The current prototype is a research demonstration, not a certified medical device.
+## 9. Project structure and documentation
 
-Its estimates can be affected by lighting, movement, camera frame rate, skin appearance, and other recording conditions.
+The repository includes the main desktop application, rPPG and signal-analysis scripts, the MediaPipe model asset, requirements, sample diagnostic outputs and supporting documentation.
 
-Independent reference-device validation is required before making clinical accuracy claims.
+Additional documentation:
+- **[Development Workflow](docs/DEVELOPMENT_WORKFLOW.md)** – project pipeline and processing stages.
+- **[Python Code Documentation](docs/CODE_DOCUMENTATION.md)** – purpose and usage of Python files.
 
-## 11. Future Development
+## 10. Scope and limitations
 
-Planned development includes:
+The current implemented application scope is heart-rate estimation. SpO₂ and blood-pressure estimation are future research objectives and are not validated features.
 
-- Improving robustness across different recording conditions and skin tones.
-- More comprehensive testing with independent reference measurements.
-- Further investigation of SpO₂ estimation.
-- Research into blood pressure estimation.
-- Exploring mobile deployment.
+Results can be affected by movement, lighting, camera quality, frame rate, face tracking and other recording conditions. Accuracy claims require comparison with a synchronized, independent reference heart-rate device. FaceVitals must not be used for diagnosis or treatment decisions.
 
-## 12. Team
+## 11. Team
 
-**SignalPioneers**
-
-This project is developed as part of the IEEE 2027 Signal Processing Cup.
+**SignalPioneers**  
+IEEE 2027 Signal Processing Cup
 
 ---
-
 *Building contactless health-monitoring technology through signal processing and engineering.*
