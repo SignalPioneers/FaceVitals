@@ -814,24 +814,49 @@ def process_frame(frame, elapsed_seconds, actual_fps):
     final_hr = None
     final_conf = None
     final_status = "Collecting POS / CHROM estimates"
+    algorithm_difference = None
+    estimate_source = "none"
 
     if pos_hr is not None and chrom_hr is not None:
-        difference = abs(pos_hr - chrom_hr)
-        if difference <= MAX_ALGORITHM_DIFFERENCE:
-            final_hr = float((pos_hr + chrom_hr) / 2.0)
-            agreement_factor = float(np.clip(1.0 - difference / 40.0, 0.35, 1.0))
-            final_conf = float(np.median([pos_conf, chrom_conf]) * agreement_factor)
-            final_status = "Estimated BPM — POS and CHROM agree"
+        algorithm_difference = abs(pos_hr - chrom_hr)
+        # Publish a combined estimate when both algorithms pass their own
+        # regional quality checks. Confidence weights the mean; disagreement
+        # lowers confidence and is explicitly shown rather than hidden.
+        pos_weight = max(float(pos_conf), 0.01)
+        chrom_weight = max(float(chrom_conf), 0.01)
+        final_hr = float(
+            (pos_hr * pos_weight + chrom_hr * chrom_weight)
+            / (pos_weight + chrom_weight)
+        )
+        agreement_factor = float(
+            np.clip(1.0 - algorithm_difference / 60.0, 0.15, 1.0)
+        )
+        final_conf = float(
+            np.average([pos_conf, chrom_conf], weights=[pos_weight, chrom_weight])
+            * agreement_factor
+        )
+        estimate_source = "POS+CHROM"
+        if algorithm_difference <= MAX_ALGORITHM_DIFFERENCE:
+            final_status = "Combined estimate — POS and CHROM agree"
         else:
             final_status = (
-                f"No combined BPM — POS/CHROM disagree by {difference:.1f} BPM"
+                f"LOW AGREEMENT — combined estimate shown; "
+                f"POS/CHROM differ by {algorithm_difference:.1f} BPM"
             )
+    elif pos_hr is not None:
+        final_hr = float(pos_hr)
+        final_conf = float(pos_conf) * 0.75
+        estimate_source = "POS only"
+        final_status = "Single algorithm estimate — POS only; CHROM unavailable"
+    elif chrom_hr is not None:
+        final_hr = float(chrom_hr)
+        final_conf = float(chrom_conf) * 0.75
+        estimate_source = "CHROM only"
+        final_status = "Single algorithm estimate — CHROM only; POS unavailable"
     elif not face_detected:
         final_status = "Face temporarily not detected — holding recent valid estimates"
     else:
-        final_status = (
-            "No combined BPM — need two valid regions from both algorithms"
-        )
+        final_status = "No BPM — insufficient valid signal from POS and CHROM"
 
     if final_hr is not None:
         current_second = int(elapsed_seconds)
@@ -903,6 +928,8 @@ def process_frame(frame, elapsed_seconds, actual_fps):
         "CHROM_Confidence": chrom_conf,
         "Final_Combined_BPM": final_hr,
         "Final_Confidence": final_conf,
+        "POS_CHROM_Difference_BPM": algorithm_difference,
+        "Estimate_Source": estimate_source,
         "Final_Status": final_status,
     }
 
@@ -1124,7 +1151,7 @@ def stop_source(manual=True):
         reason = (
             f"Measurement was shorter than the minimum analysis period ({minimum_seconds:.1f}s)."
             if not enough_data else
-            "No recent POS + CHROM combined estimate passed the quality checks."
+            "No valid POS or CHROM estimate passed the signal-quality checks."
         )
         final_status_label.config(text="Status: Stopped — no reliable final result", fg="#FFC857")
         messagebox.showwarning(
