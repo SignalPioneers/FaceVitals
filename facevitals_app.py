@@ -31,6 +31,7 @@ MIN_SKIN_RATIO = 0.10
 MAX_SAMPLE_GAP_SECONDS = 0.15
 MIN_VALID_REGIONS = 2
 MAX_REGION_SPREAD = 12.0
+MAX_AUTOCORR_DIFFERENCE = 15.0
 
 # Forehead is a compact upper-face rectangle. Cheeks are rectangular
 # sampling regions positioned from eye, nose-tip and upper-lip landmarks.
@@ -473,6 +474,13 @@ def estimate_hr_from_signal(signal_values, history, previous_hr, pending_hr, pen
     ))
     if confidence < CONFIDENCE_THRESHOLD:
         return None, confidence, "Low confidence", previous_hr, pending_hr, pending_count
+
+    # A strong spectral peak is not sufficient on its own. Require the
+    # independent time-domain periodicity estimate to support it. This is
+    # deliberately conservative: disagreement means no BPM is published.
+    if abs(raw_hr - autocorr_hr) > MAX_AUTOCORR_DIFFERENCE:
+        return None, confidence, "Low periodicity agreement", previous_hr, pending_hr, pending_count
+
     if previous_hr is not None and abs(raw_hr - previous_hr) > MAX_HR_JUMP:
         if pending_hr is not None and abs(raw_hr - pending_hr) <= 8.0:
             pending_count += 1
@@ -526,10 +534,10 @@ def update_region_estimates(region):
         )
         if hr is not None:
             state["pos_hr"], state["pos_raw_hr"] = hr, hr
-            state["pos_confidence"], state["pos_status"] = conf, status
             state["pos_last_good_time"] = time.monotonic()
-        # If this update fails a quality check, retain the last accepted estimate
-        # and its confidence briefly; a single noisy window must not blank the UI.
+        # Keep the last BPM for display/debugging, but never keep its old OK
+        # status or confidence when the newest analysis window fails validation.
+        state["pos_confidence"], state["pos_status"] = conf, status
         state["pos_previous_hr"] = previous
         state["pos_pending_hr"], state["pos_pending_count"] = pending, pending_count
         state["pos_peak_diagnostics"], state["pos_autocorr_bpm"] = signal_diagnostics(state["pos_filtered"])
@@ -545,10 +553,10 @@ def update_region_estimates(region):
         )
         if hr is not None:
             state["chrom_hr"], state["chrom_raw_hr"] = hr, hr
-            state["chrom_confidence"], state["chrom_status"] = conf, status
             state["chrom_last_good_time"] = time.monotonic()
-        # If this update fails a quality check, retain the last accepted estimate
-        # and its confidence briefly; a single noisy window must not blank the UI.
+        # Keep the last BPM for display/debugging, but never keep its old OK
+        # status or confidence when the newest analysis window fails validation.
+        state["chrom_confidence"], state["chrom_status"] = conf, status
         state["chrom_previous_hr"] = previous
         state["chrom_pending_hr"], state["chrom_pending_count"] = pending, pending_count
         state["chrom_peak_diagnostics"], state["chrom_autocorr_bpm"] = signal_diagnostics(state["chrom_filtered"])
@@ -567,16 +575,12 @@ def get_algorithm_combined(key):
         status = state[f"{key}_status"]
         last_good_time = state[f"{key}_last_good_time"]
 
-        # Uploaded videos are processed frame-by-frame and their final
-        # regional estimates remain valid at EOF. For live webcam, reject
-        # estimates that have not been refreshed recently.
-        if source_mode == "video":
-            is_fresh = last_good_time is not None
-        else:
-            is_fresh = (
-                last_good_time is not None
-                and (now - last_good_time) <= 5.0
-            )
+        # Apply the same freshness rule to webcam and uploaded video.
+        # Video EOF must not make an old accepted estimate valid forever.
+        is_fresh = (
+            last_good_time is not None
+            and (now - last_good_time) <= 5.0
+        )
 
         if (hr is not None and is_fresh
                 and conf >= CONFIDENCE_THRESHOLD and status == "OK"):
